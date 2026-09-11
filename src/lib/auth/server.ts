@@ -45,6 +45,7 @@ import {
   PREVIEW_ALLOWED_HOSTS,
   PREVIEW_CLIENT_ID,
   PREVIEW_CLIENT_SECRET,
+  deployedAuthSecret,
 } from "./preview";
 
 // Kick (and share) PGLite bootstrap as soon as the auth server module loads.
@@ -176,7 +177,7 @@ export const auth = betterAuth({
   baseURL,
   // Deployed apps inject BETTER_AUTH_SECRET. Preview: process-stable secret on
   // globalThis so HMR doesn't invalidate PGLite-backed sessions (see above).
-  secret: env("BETTER_AUTH_SECRET") ?? previewAuthSecret(),
+  secret: env("BETTER_AUTH_SECRET") ?? deployedAuthSecret() ?? previewAuthSecret(),
   database,
 
   // CSRF / origin check for credentialed auth POSTs (email sign-up/sign-in, …).
@@ -192,6 +193,10 @@ export const auth = betterAuth({
   // never merges them into one user — they stay separate identities.
   account: {
     encryptOAuthTokens: true,
+    // Serverless PGLite is per-instance. Cookie state lets Google/X finish
+    // after the round-trip lands on a different function than the one that
+    // started OAuth.
+    storeStateStrategy: "cookie",
     accountLinking: {
       enabled: true,
       trustedProviders: [
@@ -208,7 +213,7 @@ export const auth = betterAuth({
   // (incl. the client's `/get-session`) skip the DB — this shrinks the "loading"
   // window and reduces auth flicker. See the `auth` skill for the full
   // flicker-prevention guidance (gate on `isPending`; SSR the session).
-  session: { cookieCache: { enabled: true, maxAge: 300 } },
+  session: { cookieCache: { enabled: true, maxAge: 60 * 60 * 24 * 7 } },
 
   // Local email/password — toggled only via `./email-password` (not a plugin).
   ...(emailAndPasswordEnabled ? { emailAndPassword: { enabled: true } } : {}),

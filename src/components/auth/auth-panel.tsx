@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useState, type FormEvent, useEffect } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { Eye, EyeOff } from "lucide-react";
 import { authClient, GROK_PROVIDERS, signIn } from "@/lib/auth/client";
@@ -20,6 +20,18 @@ const CHECKS = [
 
 function passwordOk(pw: string) {
   return CHECKS.every((c) => c.test(pw));
+}
+
+function oauthErrorMessage(code: string) {
+  const key = code.toLowerCase();
+  if (key === "access_denied") return "Google sign-in was cancelled. Try again when you're ready.";
+  if (key === "state_mismatch" || key === "state_not_found" || key === "state_invalid") {
+    return "That Google sign-in expired. Click Continue with Google once more.";
+  }
+  if (key.includes("oauth") || key.includes("google") || key === "please_restart_the_process") {
+    return "Google sign-in didn't finish. Please try Continue with Google again.";
+  }
+  return "Sign-in didn't finish. Please try again.";
 }
 
 export function persistPlanChoice(plan: string, cycle: string, promo?: string) {
@@ -55,6 +67,18 @@ export function AuthPanel({
   const [busy, setBusy] = useState(false);
   const [oauthBusy, setOauthBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get("error");
+    if (!code) return;
+    setError(oauthErrorMessage(code));
+    params.delete("error");
+    params.delete("error_description");
+    const next = `${window.location.pathname}${params.toString() ? `?${params}` : ""}${window.location.hash}`;
+    window.history.replaceState(null, "", next);
+  }, []);
 
   const plan = planById(planId);
   const billing = (cycle === "yearly" ? "yearly" : "monthly") as BillingCycle;

@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 /**
  * Shared LIVE-PREVIEW OAuth client (server-only — NEVER import from the client).
  *
@@ -37,3 +39,16 @@ export const PREVIEW_ALLOWED_HOSTS = [
   "*.grok-sandbox.com",
   "*.vercel.app",
 ] as const;
+
+/**
+ * Stable Better Auth signing secret on Vercel when BETTER_AUTH_SECRET is unset.
+ * `previewAuthSecret()` is random per process — serverless instances would
+ * otherwise fail to decrypt the Google OAuth state cookie on callback.
+ */
+export function deployedAuthSecret(): string | undefined {
+  const deploymentId = process.env.VERCEL_DEPLOYMENT_ID?.trim();
+  if (!deploymentId) return undefined;
+  return createHash("sha256")
+    .update(`nitefill:${PREVIEW_CLIENT_SECRET}:${deploymentId}`)
+    .digest("hex");
+}
