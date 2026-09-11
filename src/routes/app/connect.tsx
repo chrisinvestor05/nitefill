@@ -119,7 +119,7 @@ function ConnectPage() {
       <ol className="space-y-4">
         <li className="rounded-2xl border border-fg/8 bg-surface p-5">
           <p className="text-xs text-orange">01</p>
-          <h2 className="mt-1 text-lg">Download Nitefill Sender 1.2</h2>
+          <h2 className="mt-1 text-lg">Download Nitefill Sender 1.3</h2>
           <p className="mt-2 text-sm text-muted">
             If you already installed an older copy, remove it first. Unzip, then
             chrome://extensions → Developer mode → Load unpacked.
@@ -132,7 +132,7 @@ function ConnectPage() {
           <p className="text-xs text-orange">02</p>
           <h2 className="mt-1 text-lg">Sign in to Instagram in Chrome</h2>
           <p className="mt-2 text-sm text-muted">
-            Leave that tab open. Sender reads followers and sends from it.
+            Leave that tab open. Sender reads the crowd around your seeds and sends from it.
           </p>
         </li>
         <li className="rounded-2xl border border-fg/8 bg-surface p-5">

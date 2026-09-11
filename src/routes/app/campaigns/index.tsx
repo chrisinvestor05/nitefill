@@ -5,6 +5,7 @@ import { getSenderStatus, type SenderStatus } from "@/lib/server/sender";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { CampaignPlaybook } from "@/components/app/campaign-playbook";
+import { listLocalCampaigns, mergeCampaignLists } from "@/lib/client/campaign-store";
 
 export const Route = createFileRoute("/app/campaigns/")({
   component: CampaignsPage,
@@ -15,13 +16,24 @@ function CampaignsPage() {
   const [rows, setRows] = useState<Campaign[]>([]);
   const [sender, setSender] = useState<SenderStatus | null>(null);
 
+  async function load() {
+    setRows(listLocalCampaigns());
+    try {
+      const server = await listCampaigns();
+      setRows(mergeCampaignLists(server));
+    } catch {
+      setRows(listLocalCampaigns());
+    }
+    try {
+      setSender(await getSenderStatus());
+    } catch {
+      /* keep previous */
+    }
+  }
+
   useEffect(() => {
-    void listCampaigns().then(setRows);
-    void getSenderStatus().then(setSender);
-    const t = setInterval(() => {
-      void listCampaigns().then(setRows);
-      void getSenderStatus().then(setSender);
-    }, 5000);
+    void load();
+    const t = setInterval(() => void load(), 5000);
     return () => clearInterval(t);
   }, []);
 

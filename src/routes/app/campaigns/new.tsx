@@ -4,6 +4,13 @@ import { createCampaign, discoverAudience } from "@/lib/server/campaigns";
 import { enqueueSenderJob } from "@/components/app/sender-live";
 import { Button } from "@/components/ui/button";
 import { Input, Textarea } from "@/components/ui/input";
+import { newId } from "@/lib/server/ids";
+import {
+  blankCampaign,
+  parseHandleList,
+  senderDiscoverJob,
+  upsertLocalCampaign,
+} from "@/lib/client/campaign-store";
 
 export const Route = createFileRoute("/app/campaigns/new")({
   component: NewCampaign,
@@ -30,40 +37,59 @@ function NewCampaign() {
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
+    const seeds = parseHandleList(seedAccounts);
+    if (!seeds.length) {
+      setError("Add at least one public Instagram seed account.");
+      return;
+    }
     setBusy(true);
     setError(null);
-    try {
-      const created = await createCampaign({
-        data: {
-          name: name || eventName || `${city} night`,
-          eventName,
-          venue,
-          city,
-          eventDate,
-          genre,
-          genderFilter,
-          bioKeywords,
-          seedAccounts,
-          messageTemplate,
-          dailyLimit,
-        },
-      });
-      const found = await discoverAudience({
-        data: {
-          campaignId: created.id,
-          city,
-          gender: genderFilter,
-          genre,
-          keywords: bioKeywords,
-          seedAccounts,
-        },
-      });
-      if (found.job) enqueueSenderJob(found.job);
-      await navigate({ to: "/app/campaigns/$id", params: { id: created.id } });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not create campaign.");
-      setBusy(false);
-    }
+    const id = newId("cmp");
+    const local = blankCampaign({
+      id,
+      name: name || eventName || `${city} night`,
+      eventName: eventName || null,
+      venue: venue || null,
+      city,
+      eventDate: eventDate || null,
+      genre: genre || null,
+      genderFilter,
+      bioKeywords: bioKeywords || null,
+      seedAccounts: seeds.join(", "),
+      messageTemplate,
+      dailyLimit,
+      status: "draft",
+      discoverStatus: "pending",
+    });
+    upsertLocalCampaign(local);
+    enqueueSenderJob(senderDiscoverJob(local));
+    void createCampaign({
+      data: {
+        id,
+        name: local.name,
+        eventName: eventName || undefined,
+        venue: venue || undefined,
+        city,
+        eventDate: eventDate || undefined,
+        genre: genre || undefined,
+        genderFilter,
+        bioKeywords,
+        seedAccounts: seeds.join(", "),
+        messageTemplate,
+        dailyLimit,
+      },
+    }).catch(() => undefined);
+    void discoverAudience({
+      data: {
+        campaignId: id,
+        city,
+        gender: genderFilter,
+        genre,
+        keywords: bioKeywords,
+        seedAccounts: seeds.join(", "),
+      },
+    }).catch(() => undefined);
+    await navigate({ to: "/app/campaigns/$id", params: { id } });
   }
 
   return (
@@ -71,8 +97,9 @@ function NewCampaign() {
       <div>
         <h1 className="text-3xl">New campaign</h1>
         <p className="mt-2 text-sm text-muted">
-          Seed accounts whose followers look like your night. Nitefill Sender
-          pulls those real people from Instagram, then sends from your account.
+          Seed accounts whose crowd looks like your night. Sender pulls their
+          followers, people they follow, and people who like or comment on their
+          posts — then sends from your Instagram.
         </p>
         <p className="mt-2 text-xs text-subtle">
           Sender not installed yet?{" "}
@@ -129,7 +156,7 @@ function NewCampaign() {
           placeholder="fabriclondon, ministryofsound"
         />
         <span className="mt-1 block text-xs text-subtle">
-          Public accounts. Sender pulls their followers — never more than we'll message.
+          Public pages. If Instagram hides the follower list, Sender still reads following, likes and comments.
         </span>
       </label>
       <label className="block text-sm text-muted">
@@ -154,7 +181,7 @@ function NewCampaign() {
       </label>
       {error && <p className="text-sm text-danger">{error}</p>}
       <Button type="submit" disabled={busy}>
-        {busy ? "Saving…" : "Save and find followers"}
+        {busy ? "Saving…" : "Save and find people"}
       </Button>
     </form>
   );

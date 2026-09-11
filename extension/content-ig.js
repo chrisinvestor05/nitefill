@@ -97,6 +97,11 @@ async function lookup(username) {
   if (!user) throw new Error(`Instagram user @${handle} not found`);
   const posts = user.edge_owner_to_timeline_media?.edges || [];
   const caption = posts[0]?.node?.edge_media_to_caption?.edges?.[0]?.node?.text || "";
+  const mediaIds = [];
+  for (const e of posts) {
+    const id = e?.node?.id || e?.node?.pk;
+    if (id) mediaIds.push(String(id));
+  }
   return {
     handle: String(user.username),
     displayName: String(user.full_name || user.username),
@@ -105,29 +110,95 @@ async function lookup(username) {
     isPrivate: Boolean(user.is_private),
     followerCount: Number(user.follower_count || user.edge_followed_by?.count || 0),
     recentPost: String(caption || user.biography || ""),
+    mediaIds,
   };
 }
 
-async function followersApi(userId, limit = 18) {
+function asUser(u) {
+  return {
+    handle: String(u.username || u.handle || ""),
+    displayName: String(u.full_name || u.username || u.handle || ""),
+    bio: String(u.biography || u.bio || ""),
+    igPk: String(u.pk || u.id || u.igPk || ""),
+    isPrivate: Boolean(u.is_private),
+    recentPost: "",
+  };
+}
+
+async function friendshipList(userId, kind, limit = 18) {
   const out = [];
   const qs = new URLSearchParams({
     count: String(Math.min(50, limit)),
     search_surface: "follow_list_page",
   });
-  const data = await igFetch(`/api/v1/friendships/${userId}/followers/?${qs.toString()}`, {
+  const data = await igFetch(`/api/v1/friendships/${userId}/${kind}/?${qs.toString()}`, {
     timeout: 4000,
   });
   const users = data.users || data.items || [];
   for (const u of users) {
-    out.push({
-      handle: String(u.username || ""),
-      displayName: String(u.full_name || u.username || ""),
-      bio: String(u.biography || ""),
-      igPk: String(u.pk || u.id || ""),
-      isPrivate: Boolean(u.is_private),
-      recentPost: "",
-    });
+    const row = asUser(u);
+    if (!row.handle) continue;
+    out.push(row);
     if (out.length >= limit) break;
+  }
+  return out;
+}
+
+async function followersApi(userId, limit = 18) {
+  return friendshipList(userId, "followers", limit);
+}
+
+async function followingApi(userId, limit = 18) {
+  return friendshipList(userId, "following", limit);
+}
+
+async function userMediaIds(userId, limit = 6) {
+  const data = await igFetch(`/api/v1/feed/user/${userId}/?count=${limit}`, { timeout: 4000 });
+  const items = data.items || data.feed_items || [];
+  const ids = [];
+  for (const item of items) {
+    const media = item.media || item;
+    const id = media.pk || media.id;
+    if (id) ids.push(String(id));
+    if (ids.length >= limit) break;
+  }
+  return ids;
+}
+
+async function engagers(mediaIds, limit = 18) {
+  const out = [];
+  const seen = new Set();
+  for (const id of (mediaIds || []).slice(0, 3)) {
+    try {
+      const likers = await igFetch(`/api/v1/media/${id}/likers/`, { timeout: 4000 });
+      for (const u of likers.users || []) {
+        const row = asUser(u);
+        const key = row.handle.toLowerCase();
+        if (!key || seen.has(key) || row.isPrivate) continue;
+        seen.add(key);
+        out.push(row);
+        if (out.length >= limit) return out;
+      }
+    } catch {
+      /* likes often locked */
+    }
+    try {
+      const comments = await igFetch(`/api/v1/media/${id}/comments/?can_support_threading=true`, {
+        timeout: 4000,
+      });
+      for (const c of comments.comments || comments.items || []) {
+        const u = c.user || c;
+        const row = asUser(u);
+        const key = row.handle.toLowerCase();
+        if (!key || seen.has(key) || row.isPrivate) continue;
+        seen.add(key);
+        if (c.text) row.recentPost = String(c.text).slice(0, 140);
+        out.push(row);
+        if (out.length >= limit) return out;
+      }
+    } catch {
+      /* comments often locked */
+    }
   }
   return out;
 }
@@ -153,11 +224,13 @@ function skipHandle(handle) {
   );
 }
 
-async function followersDom(limit = 18) {
+async function listDom(kind = "followers", limit = 18) {
+  const suffix = kind === "following" ? "/following/" : "/followers/";
+  const label = kind === "following" ? "following" : "followers";
   const link =
-    document.querySelector('a[href$="/followers/"]') ||
-    [...document.querySelectorAll("a")].find((a) => /followers/i.test(a.getAttribute("href") || ""));
-  if (!link) throw new Error("Could not open the followers list on this profile.");
+    document.querySelector(`a[href$="${suffix}"]`) ||
+    [...document.querySelectorAll("a")].find((a) => new RegExp(label, "i").test(a.getAttribute("href") || ""));
+  if (!link) throw new Error(`Could not open the ${label} list on this profile.`);
   link.click();
   await sleep(700);
 
@@ -167,7 +240,7 @@ async function followersDom(limit = 18) {
     dialog = document.querySelector('div[role="dialog"]');
     if (!dialog) await sleep(120);
   }
-  if (!dialog) throw new Error("Instagram did not open the followers dialog.");
+  if (!dialog) throw new Error(`Instagram did not open the ${label} dialog.`);
 
   const seen = new Set();
   const out = [];
@@ -202,7 +275,14 @@ async function followersDom(limit = 18) {
     if (out.length === before) stagnant += 1;
     else stagnant = 0;
   }
+  const closer = dialog.querySelector('svg[aria-label="Close"]')?.closest("button, div[role='button']");
+  if (closer) closer.click();
+  await sleep(200);
   return out;
+}
+
+async function followersDom(limit = 18) {
+  return listDom("followers", limit);
 }
 
 async function sendApi(userId, text) {
@@ -385,7 +465,11 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (msg?.type === "WHOAMI") return whoami();
     if (msg?.type === "LOOKUP") return lookup(msg.username);
     if (msg?.type === "FOLLOWERS") return followersApi(msg.userId, msg.limit || 50);
-    if (msg?.type === "FOLLOWERS_DOM") return followersDom(msg.limit || 50);
+    if (msg?.type === "FOLLOWING") return followingApi(msg.userId, msg.limit || 50);
+    if (msg?.type === "FOLLOWERS_DOM") return listDom("followers", msg.limit || 50);
+    if (msg?.type === "FOLLOWING_DOM") return listDom("following", msg.limit || 50);
+    if (msg?.type === "ENGAGERS") return engagers(msg.mediaIds || [], msg.limit || 50);
+    if (msg?.type === "MEDIA_IDS") return userMediaIds(msg.userId, msg.limit || 6);
     if (msg?.type === "SEND_API") return sendApi(msg.userId, msg.text);
     if (msg?.type === "SEND_DOM") return sendDom(msg.text);
     if (msg?.type === "INBOX") return readInbox();

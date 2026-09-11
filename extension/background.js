@@ -121,6 +121,17 @@ async function heartbeat() {
   }
 }
 
+function takeRows(rows, seen, profiles, limit) {
+  if (!Array.isArray(rows)) return;
+  for (const p of rows) {
+    const handle = String(p.handle || "").toLowerCase();
+    if (!handle || seen.has(handle) || p.isPrivate) continue;
+    seen.add(handle);
+    profiles.push(p);
+    if (profiles.length >= limit) return;
+  }
+}
+
 async function doDiscover(job) {
   await broadcast({ kind: "discover-progress", campaignId: job.campaignId, message: "Opening Instagram…" });
   const tab = await ensureIgTab();
@@ -128,15 +139,17 @@ async function doDiscover(job) {
   if (!me?.ok) throw new Error(me?.error || "Sign in to Instagram in Chrome.");
   const profiles = [];
   const seen = new Set();
-  const limit = Math.min(24, job.limit || 18);
+  const limit = Math.min(24, job.limit || 24);
   const seeds = (job.seeds || []).filter(Boolean);
   const perSeed = Math.max(8, Math.ceil(limit / Math.max(1, seeds.length)));
+  if (me.handle) seen.add(String(me.handle).toLowerCase());
+  for (const seed of seeds) seen.add(String(seed).toLowerCase());
 
   for (const seed of seeds) {
     await broadcast({
       kind: "discover-progress",
       campaignId: job.campaignId,
-      message: `Reading @${seed} followers…`,
+      message: `Looking up @${seed}…`,
     });
     let user;
     try {
@@ -145,33 +158,86 @@ async function doDiscover(job) {
       await patch({ lastError: `Seed @${seed}: ${err instanceof Error ? err.message : String(err)}` });
       continue;
     }
-    if (user?.error || user?.ok === false) continue;
-
-    let rows = [];
-    try {
-      const list = await sendToTab(tab.id, { type: "FOLLOWERS", userId: user.igPk, limit: perSeed });
-      rows = Array.isArray(list) ? list : [];
-    } catch {
-      rows = [];
+    if (user?.error || user?.ok === false) {
+      await broadcast({
+        kind: "discover-progress",
+        campaignId: job.campaignId,
+        message: `@${seed} could not be read. Trying the next seed…`,
+      });
+      continue;
+    }
+    if (user.isPrivate) {
+      await broadcast({
+        kind: "discover-progress",
+        campaignId: job.campaignId,
+        message: `@${seed} is private — skipped.`,
+      });
+      continue;
     }
 
-    if (rows.length < 6) {
-      await chrome.tabs.update(tab.id, { url: `https://www.instagram.com/${seed}/`, active: true });
-      await waitComplete(tab.id);
-      await sleep(700);
+    try {
+      await broadcast({
+        kind: "discover-progress",
+        campaignId: job.campaignId,
+        message: `Reading @${seed} followers…`,
+      });
+      takeRows(await sendToTab(tab.id, { type: "FOLLOWERS", userId: user.igPk, limit: perSeed }), seen, profiles, limit);
+    } catch {
+      /* blocked */
+    }
+    if (profiles.length >= limit) break;
+
+    try {
+      await broadcast({
+        kind: "discover-progress",
+        campaignId: job.campaignId,
+        message: `Reading who @${seed} follows…`,
+      });
+      takeRows(await sendToTab(tab.id, { type: "FOLLOWING", userId: user.igPk, limit: perSeed }), seen, profiles, limit);
+    } catch {
+      /* blocked */
+    }
+    if (profiles.length >= limit) break;
+
+    let mediaIds = Array.isArray(user.mediaIds) ? user.mediaIds : [];
+    if (mediaIds.length < 2 && user.igPk) {
       try {
-        const list = await sendToTab(tab.id, { type: "FOLLOWERS_DOM", limit: perSeed });
-        if (Array.isArray(list) && list.length > rows.length) rows = list;
+        const extra = await sendToTab(tab.id, { type: "MEDIA_IDS", userId: user.igPk, limit: 6 });
+        if (Array.isArray(extra)) mediaIds = extra;
       } catch {
-        /* keep API rows */
+        /* ignore */
       }
     }
+    if (mediaIds.length) {
+      try {
+        await broadcast({
+          kind: "discover-progress",
+          campaignId: job.campaignId,
+          message: `Reading likes and comments on @${seed}…`,
+        });
+        takeRows(await sendToTab(tab.id, { type: "ENGAGERS", mediaIds, limit: perSeed }), seen, profiles, limit);
+      } catch {
+        /* blocked */
+      }
+    }
+    if (profiles.length >= limit) break;
 
-    for (const p of rows) {
-      const handle = String(p.handle || "").toLowerCase();
-      if (!handle || seen.has(handle) || p.isPrivate) continue;
-      seen.add(handle);
-      profiles.push(p);
+    if (profiles.length < 6) {
+      await chrome.tabs.update(tab.id, { url: `https://www.instagram.com/${seed}/`, active: true });
+      await waitComplete(tab.id);
+      await sleep(800);
+      try {
+        takeRows(await sendToTab(tab.id, { type: "FOLLOWERS_DOM", limit: perSeed }), seen, profiles, limit);
+      } catch {
+        /* keep what we have */
+      }
+      if (profiles.length < 6) {
+        try {
+          takeRows(await sendToTab(tab.id, { type: "FOLLOWING_DOM", limit: perSeed }), seen, profiles, limit);
+        } catch {
+          /* keep */
+        }
+      }
     }
 
     await broadcast({
@@ -193,10 +259,12 @@ async function doDiscover(job) {
 
   const s = await state();
   const done = new Set(s.doneDiscover || []);
-  done.add(job.campaignId);
+  if (profiles.length > 0) done.add(job.campaignId);
   await patch({
-    lastJob: `Found ${profiles.length} followers`,
-    lastError: profiles.length ? "" : "No public followers returned. Try another seed account.",
+    lastJob: profiles.length ? `Found ${profiles.length} people` : "No public accounts yet",
+    lastError: profiles.length
+      ? ""
+      : "Instagram hid those lists. Paste handles on the campaign page or try a venue you follow.",
     doneDiscover: [...done],
   });
   await broadcast({
@@ -205,8 +273,8 @@ async function doDiscover(job) {
     profiles,
     message:
       profiles.length > 0
-        ? `Found ${profiles.length} followers. Launch SafeSend when you are ready.`
-        : "No public followers yet. Try a different seed account.",
+        ? `Found ${profiles.length} people. Launch SafeSend when you are ready.`
+        : "Instagram hid those lists. Paste handles on the campaign page, or try a public venue you follow.",
   });
 }
 
@@ -420,7 +488,15 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         (j) => j.kind === incoming.kind && j.campaignId === incoming.campaignId && j.handle === incoming.handle,
       );
       if (!dup) jobs.push(incoming);
-      await patch({ localJobs: jobs, lastJob: incoming.kind === "discover" ? "Finding followers…" : "Queued" });
+      const done =
+        incoming.kind === "discover"
+          ? (cur.doneDiscover || []).filter((id) => id !== incoming.campaignId)
+          : cur.doneDiscover || [];
+      await patch({
+        localJobs: jobs,
+        doneDiscover: done,
+        lastJob: incoming.kind === "discover" ? "Finding people…" : "Queued",
+      });
       void tick();
       return { ok: true, queued: jobs.length };
     }

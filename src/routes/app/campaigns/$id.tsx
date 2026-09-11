@@ -15,8 +15,23 @@ import { getSenderStatus, type SenderStatus } from "@/lib/server/sender";
 import { rewriteInvite } from "@/lib/server/ai";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Textarea } from "@/components/ui/input";
 import { personalizeTemplate } from "@/lib/personalize";
 import { enqueueSenderJob, useExtensionLive } from "@/components/app/sender-live";
+import { newId } from "@/lib/server/ids";
+import {
+  appendLocalLog,
+  getLocalCampaign,
+  handlesToAudience,
+  listLocalAudience,
+  listLocalLogs,
+  mergeLocalAudience,
+  patchLocalCampaign,
+  profilesToAudience,
+  senderDiscoverJob,
+  setLocalAudienceStatus,
+  upsertLocalCampaign,
+} from "@/lib/client/campaign-store";
 
 export const Route = createFileRoute("/app/campaigns/$id")({
   component: CampaignDetail,
@@ -28,33 +43,6 @@ function statusTone(status: string) {
   if (status === "completed") return "teal" as const;
   if (status === "paused" || status === "failed") return "orange" as const;
   return "muted" as const;
-}
-
-function asAudience(campaignId: string, profiles: Array<Record<string, unknown>>): AudienceRow[] {
-  const out: AudienceRow[] = [];
-  for (const p of profiles) {
-    const handle = String(p.handle || "")
-      .replace(/^@+/, "")
-      .toLowerCase();
-    if (!handle) continue;
-    out.push({
-      id: String(p.igPk || p.id || `local-${handle}`),
-      campaignId,
-      handle,
-      displayName: String(p.displayName || p.display_name || handle),
-      city: (p.city as string | null) ?? null,
-      gender: null,
-      bio: (p.bio as string | null) ?? null,
-      recentPost: (p.recentPost as string | null) ?? null,
-      genreTags: null,
-      matchScore: Number(p.matchScore ?? 70),
-      status: "queued",
-      message: null,
-      failReason: null,
-      igPk: p.igPk ? String(p.igPk) : null,
-    });
-  }
-  return out;
 }
 
 function CampaignDetail() {
@@ -70,46 +58,69 @@ function CampaignDetail() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [discoverMsg, setDiscoverMsg] = useState<string | null>(null);
+  const [missing, setMissing] = useState(false);
+  const [paste, setPaste] = useState("");
 
-  function discoverJob(c: Campaign) {
-    return {
-      kind: "discover" as const,
-      campaignId: c.id,
-      seeds: c.seedAccounts
-        .split(/[,\s]+/)
-        .map((s) => s.replace(/^@+/, "").trim())
-        .filter(Boolean),
-      keywords: (c.bioKeywords || "").split(/[,\s]+/).filter(Boolean),
-      gender: c.genderFilter || "all",
-      city: c.city || "",
-      genre: c.genre || "",
-      limit: 18,
-    };
+  function applyLocal(next?: Campaign | null) {
+    const local = next || getLocalCampaign(id);
+    if (local) setCampaign(local);
+    setAudience(listLocalAudience(id));
+    setLogs(listLocalLogs(id));
+    return local;
+  }
+
+  function kickDiscover(c: Campaign) {
+    if (!c.seedAccounts) return;
+    kicked.current = true;
+    enqueueSenderJob(senderDiscoverJob(c));
+    patchLocalCampaign(id, { discoverStatus: "pending", discoverError: null });
+    setDiscoverMsg("Finding people on Instagram…");
   }
 
   async function load() {
-    const [c, a, o, s] = await Promise.all([
+    const results = await Promise.allSettled([
       getCampaign({ data: { id } }),
       listAudience({ data: { campaignId: id } }),
       listOutreach({ data: { campaignId: id } }),
       getSenderStatus(),
     ]);
-    setCampaign(c);
-    if (a.length) setAudience(a);
-    setLogs(o);
-    setSender(s);
-    if (c && !kicked.current && (c.discoverStatus === "pending" || c.discoverStatus === "running") && c.seedAccounts) {
-      kicked.current = true;
-      enqueueSenderJob(discoverJob(c));
-      setDiscoverMsg("Finding followers from Instagram…");
+    const serverCampaign = results[0].status === "fulfilled" ? results[0].value : null;
+    const serverAudience = results[1].status === "fulfilled" ? results[1].value : [];
+    const serverLogs = results[2].status === "fulfilled" ? results[2].value : [];
+    const serverSender = results[3].status === "fulfilled" ? results[3].value : null;
+
+    if (serverCampaign) upsertLocalCampaign(serverCampaign);
+    if (serverAudience.length) mergeLocalAudience(id, serverAudience);
+    for (const row of serverLogs) appendLocalLog(row);
+    if (serverSender) setSender(serverSender);
+
+    const local = applyLocal();
+    if (!local && !serverCampaign) setMissing(true);
+
+    const c = local || serverCampaign;
+    if (c && !kicked.current && c.seedAccounts && listLocalAudience(id).length === 0) {
+      kickDiscover(c);
     }
   }
 
   useEffect(() => {
     kicked.current = false;
+    setMissing(false);
+    setError(null);
+    setDiscoverMsg(null);
+    const local = applyLocal();
+    if (local?.seedAccounts && listLocalAudience(id).length === 0) {
+      kickDiscover(local);
+    }
     void load();
-    const timer = setInterval(() => void load(), 5000);
-    return () => clearInterval(timer);
+    const timer = window.setInterval(() => void load(), 8000);
+    const fail = window.setTimeout(() => {
+      if (!getLocalCampaign(id)) setMissing(true);
+    }, 4000);
+    return () => {
+      window.clearInterval(timer);
+      window.clearTimeout(fail);
+    };
   }, [id]);
 
   useEffect(() => {
@@ -120,22 +131,39 @@ function CampaignDetail() {
         if (d.message) setDiscoverMsg(String(d.message));
       }
       if (d.kind === "discover-done" && Array.isArray(d.profiles)) {
-        const rows = asAudience(id, d.profiles);
+        const rows = profilesToAudience(id, d.profiles);
         if (rows.length) {
-          setAudience((cur) => {
-            const seen = new Set(cur.map((r) => r.handle));
-            return [...cur, ...rows.filter((r) => !seen.has(r.handle))];
-          });
+          const next = mergeLocalAudience(id, rows);
+          setAudience(next);
+          setCampaign(getLocalCampaign(id));
         }
-        setDiscoverMsg(String(d.message || `Found ${rows.length} followers`));
+        setDiscoverMsg(String(d.message || (rows.length ? `Found ${rows.length} people` : "No public accounts yet.")));
+        patchLocalCampaign(id, {
+          discoverStatus: rows.length ? "done" : "idle",
+          discoverError: rows.length ? null : String(d.message || "Instagram hid those lists."),
+        });
       }
       if (d.kind === "discover-error") {
-        setError(String(d.message || "Could not read followers."));
+        setError(String(d.message || "Could not read people from Instagram."));
+        patchLocalCampaign(id, { discoverStatus: "error", discoverError: String(d.message || "") });
       }
       if (d.kind === "sent" && d.handle) {
-        setAudience((cur) =>
-          cur.map((row) => (row.handle === d.handle ? { ...row, status: "sent" } : row)),
-        );
+        const next = setLocalAudienceStatus(id, String(d.handle), "sent");
+        setAudience(next);
+        setCampaign(getLocalCampaign(id));
+        const person = next.find((r) => r.handle === d.handle);
+        appendLocalLog({
+          id: newId("log"),
+          campaignId: id,
+          audienceId: person?.id || String(d.handle),
+          handle: String(d.handle),
+          message: person?.message || String(d.message || ""),
+          sentAt: new Date().toISOString(),
+          replied: false,
+          repliedAt: null,
+          displayName: person?.displayName,
+        });
+        setLogs(listLocalLogs(id));
       }
     }
     window.addEventListener("nitefill-ext", onEvt);
@@ -143,51 +171,59 @@ function CampaignDetail() {
   }, [id]);
 
   async function launch() {
+    if (!campaign) return;
     setBusy(true);
     setError(null);
+    const now = new Date().toISOString();
+    patchLocalCampaign(id, { status: "running", startedAt: campaign.startedAt || now });
+    setCampaign(getLocalCampaign(id));
     try {
-      try {
-        const res = await startCampaign({ data: { id } });
-        if (res.discover) enqueueSenderJob(res.discover);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Could not mark the campaign running.");
-      }
-      for (const person of audience.filter((a) => a.status === "queued")) {
-        const message =
-          person.message ||
-          personalizeTemplate(
-            campaign?.messageTemplate || "",
-            {
-              displayName: person.displayName,
-              handle: person.handle,
-              city: person.city || campaign?.city || "",
-              bio: person.bio || "",
-              recentPost: person.recentPost || "",
-              genreTags: (person.genreTags || "").split(",").map((s) => s.trim()).filter(Boolean),
-            },
-            campaign?.eventName || campaign?.name || "a night",
-            campaign?.city || "",
-          );
-        enqueueSenderJob({
-          kind: "send",
-          campaignId: id,
-          audienceId: person.id,
-          handle: person.handle,
-          displayName: person.displayName,
-          igPk: person.igPk,
-          message,
-        });
-      }
-      await load();
-    } finally {
-      setBusy(false);
+      const res = await startCampaign({ data: { id, seedAccounts: campaign.seedAccounts } });
+      if (res.discover) enqueueSenderJob(res.discover);
+    } catch {
+      /* local launch still sends */
     }
+    for (const person of audience.filter((a) => a.status === "queued")) {
+      const message =
+        person.message ||
+        personalizeTemplate(
+          campaign.messageTemplate || "",
+          {
+            displayName: person.displayName,
+            handle: person.handle,
+            city: person.city || campaign.city || "",
+            bio: person.bio || "",
+            recentPost: person.recentPost || "",
+            genreTags: (person.genreTags || "").split(",").map((s) => s.trim()).filter(Boolean),
+          },
+          campaign.eventName || campaign.name || "a night",
+          campaign.city || "",
+        );
+      setLocalAudienceStatus(id, person.handle, "queued", { message });
+      enqueueSenderJob({
+        kind: "send",
+        campaignId: id,
+        audienceId: person.id,
+        handle: person.handle,
+        displayName: person.displayName,
+        igPk: person.igPk,
+        message,
+        local: true,
+      });
+    }
+    setAudience(listLocalAudience(id));
+    setBusy(false);
   }
 
   async function pause() {
     setBusy(true);
-    await pauseCampaign({ data: { id } });
-    await load();
+    patchLocalCampaign(id, { status: "paused" });
+    setCampaign(getLocalCampaign(id));
+    try {
+      await pauseCampaign({ data: { id } });
+    } catch {
+      /* local pause stands */
+    }
     setBusy(false);
   }
 
@@ -195,9 +231,9 @@ function CampaignDetail() {
     if (!campaign) return;
     setBusy(true);
     setError(null);
-    kicked.current = true;
+    kickDiscover(campaign);
     try {
-      const res = await discoverAudience({
+      await discoverAudience({
         data: {
           campaignId: id,
           city: campaign.city,
@@ -207,16 +243,23 @@ function CampaignDetail() {
           seedAccounts: campaign.seedAccounts,
         },
       });
-      enqueueSenderJob(res.job ?? discoverJob(campaign));
-      setDiscoverMsg("Finding followers from Instagram…");
-      await load();
-    } catch (err) {
-      enqueueSenderJob(discoverJob(campaign));
-      setDiscoverMsg("Finding followers from Instagram…");
-      setError(err instanceof Error ? err.message : null);
-    } finally {
-      setBusy(false);
+    } catch {
+      /* job already queued locally */
     }
+    setBusy(false);
+  }
+
+  function addHandles() {
+    const rows = handlesToAudience(id, paste);
+    if (!rows.length) {
+      setError("Paste Instagram handles like @name, one per line or comma-separated.");
+      return;
+    }
+    const next = mergeLocalAudience(id, rows);
+    setAudience(next);
+    setCampaign(getLocalCampaign(id));
+    setPaste("");
+    setDiscoverMsg(`Added ${rows.length} handle${rows.length === 1 ? "" : "s"} to this campaign.`);
   }
 
   async function previewOne(person: AudienceRow) {
@@ -256,7 +299,17 @@ function CampaignDetail() {
   }
 
   if (!campaign) {
-    return <p className="text-muted">Loading campaign…</p>;
+    if (missing) {
+      return (
+        <div className="space-y-3">
+          <p className="text-muted">That campaign is not on this browser.</p>
+          <Link to="/app/campaigns" className="text-sm text-teal hover:underline">
+            Back to campaigns
+          </Link>
+        </div>
+      );
+    }
+    return <p className="text-muted">Opening campaign…</p>;
   }
 
   const total = Math.max(campaign.queued + campaign.sent + campaign.failed, audience.length);
@@ -290,7 +343,7 @@ function CampaignDetail() {
             {campaign.status === "running" ? "SafeSend running" : campaign.status}
           </Badge>
           {campaign.status !== "running" && campaign.status !== "completed" && (
-            <Button onClick={launch} disabled={busy}>
+            <Button onClick={launch} disabled={busy || audience.length === 0}>
               {busy ? "Working…" : "Launch SafeSend"}
             </Button>
           )}
@@ -300,7 +353,7 @@ function CampaignDetail() {
             </Button>
           )}
           <Button variant="ghost" onClick={rediscover} disabled={busy}>
-            {busy ? "Finding…" : "Find followers"}
+            {busy ? "Finding…" : "Find people"}
           </Button>
         </div>
       </div>
@@ -309,7 +362,7 @@ function CampaignDetail() {
         <aside className="rounded-2xl border border-orange/30 bg-orange/8 p-5">
           <p className="font-medium text-fg">Nitefill Sender is not on this Chrome</p>
           <p className="mt-1 text-sm text-muted">
-            Download the extension, Load unpacked, then refresh. Finding followers cannot start without it.
+            Download Sender 1.3, Load unpacked, then refresh. Finding people cannot start without it.
           </p>
           <Link to="/app/connect" className="mt-3 inline-block text-sm text-teal hover:underline">
             Connect Instagram
@@ -379,7 +432,7 @@ function CampaignDetail() {
         <h2 className="mb-3 text-xl">Audience</h2>
         {audience.length === 0 ? (
           <p className="text-sm text-muted">
-            No followers yet. Keep Instagram open and tap Find followers — the first batch should land in a few seconds.
+            No one yet. Keep Instagram open and tap Find people — or paste handles below if Instagram hides the lists.
           </p>
         ) : (
           <ul className="divide-y divide-fg/8 rounded-2xl border border-fg/8">
@@ -403,6 +456,21 @@ function CampaignDetail() {
             ))}
           </ul>
         )}
+        <div className="mt-4 rounded-2xl border border-fg/8 bg-surface p-4">
+          <p className="text-sm font-medium text-fg">Paste handles</p>
+          <p className="mt-1 text-xs text-subtle">
+            If Instagram blocks the follower list, drop usernames here and Launch SafeSend still messages them from your account.
+          </p>
+          <Textarea
+            className="mt-3"
+            value={paste}
+            onChange={(e) => setPaste(e.target.value)}
+            placeholder="@alice, @bob"
+          />
+          <Button className="mt-3" size="sm" variant="ghost" type="button" onClick={addHandles} disabled={!paste.trim()}>
+            Add to audience
+          </Button>
+        </div>
       </section>
       <section>
         <h2 className="mb-3 text-xl">Sent from Instagram</h2>

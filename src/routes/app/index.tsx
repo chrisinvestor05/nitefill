@@ -7,6 +7,15 @@ import { Badge } from "@/components/ui/badge";
 import { planById } from "@/data/content";
 import { RedeemPromo } from "@/components/app/redeem-promo";
 import { CampaignPlaybook } from "@/components/app/campaign-playbook";
+import { enqueueSenderJob } from "@/components/app/sender-live";
+import {
+  listLocalAudience,
+  listLocalCampaigns,
+  mergeCampaignLists,
+  sampleRooftop,
+  senderDiscoverJob,
+  upsertLocalCampaign,
+} from "@/lib/client/campaign-store";
 
 export const Route = createFileRoute("/app/")({
   component: OverviewPage,
@@ -22,10 +31,33 @@ function OverviewPage() {
   const [error, setError] = useState<string | null>(null);
 
   async function load() {
-    const [s, c, p] = await Promise.all([dashboardStats(), listCampaigns(), getProfile()]);
-    setStats(s);
-    setCampaigns(c);
-    setProfile(p);
+    const localCampaigns = listLocalCampaigns();
+    const localAudience = listLocalAudience();
+    setCampaigns(localCampaigns);
+    try {
+      const [s, c, p] = await Promise.all([dashboardStats(), listCampaigns(), getProfile()]);
+      const merged = mergeCampaignLists(c);
+      setCampaigns(merged);
+      setProfile(p);
+      setStats({
+        ...s,
+        campaigns: Math.max(s.campaigns, merged.length),
+        sent: Math.max(s.sent, localAudience.filter((a) => a.status === "sent" || a.status === "replied").length),
+        queued: Math.max(s.queued, localAudience.filter((a) => a.status === "queued" || a.status === "sending").length),
+        replied: Math.max(s.replied, localAudience.filter((a) => a.status === "replied").length),
+      });
+    } catch {
+      setCampaigns(localCampaigns);
+      setStats({
+        campaigns: localCampaigns.length,
+        running: localCampaigns.filter((c) => c.status === "running").length,
+        sent: localAudience.filter((a) => a.status === "sent" || a.status === "replied").length,
+        replied: localAudience.filter((a) => a.status === "replied").length,
+        queued: localAudience.filter((a) => a.status === "queued" || a.status === "sending").length,
+        senderOnline: false,
+        instagramHandle: null,
+      });
+    }
   }
 
   useEffect(() => {
@@ -37,13 +69,11 @@ function OverviewPage() {
   async function sample() {
     setBusy(true);
     setError(null);
-    try {
-      const created = await seedSampleCampaign();
-      await navigate({ to: "/app/campaigns/$id", params: { id: created.id } });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not start the sample night.");
-      setBusy(false);
-    }
+    const local = sampleRooftop();
+    upsertLocalCampaign(local);
+    enqueueSenderJob(senderDiscoverJob(local));
+    void seedSampleCampaign({ data: { id: local.id } }).catch(() => undefined);
+    await navigate({ to: "/app/campaigns/$id", params: { id: local.id } });
   }
 
   const plan = planById(profile?.planId ?? "pro");
@@ -113,7 +143,7 @@ function OverviewPage() {
         </div>
         {campaigns.length === 0 ? (
           <div className="rounded-2xl border border-dashed border-fg/15 bg-surface/50 p-8 text-center">
-            <p className="text-muted">No campaigns yet. Start with a London rooftop sample — it launches and sends the first wave for you.</p>
+            <p className="text-muted">No campaigns yet. Start with a London rooftop sample — it launches and finds people for you.</p>
             <Button className="mt-5" onClick={sample} disabled={busy}>
               {busy ? "Launching…" : "Run sample rooftop"}
             </Button>

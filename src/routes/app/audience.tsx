@@ -4,6 +4,7 @@ import { listAudience, type AudienceRow } from "@/lib/server/campaigns";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { listLocalAudience, mergeLocalAudience } from "@/lib/client/campaign-store";
 
 export const Route = createFileRoute("/app/audience")({
   component: AudiencePage,
@@ -16,7 +17,29 @@ function AudiencePage() {
   const [gender, setGender] = useState("all");
 
   useEffect(() => {
-    void listAudience({ data: {} }).then(setRows);
+    setRows(listLocalAudience());
+    void listAudience({ data: {} })
+      .then((server) => {
+        const byCampaign = new Map<string, AudienceRow[]>();
+        for (const row of server) {
+          const key = row.campaignId || "_";
+          const list = byCampaign.get(key) || [];
+          list.push(row);
+          byCampaign.set(key, list);
+        }
+        for (const [campaignId, list] of byCampaign) {
+          if (campaignId !== "_") mergeLocalAudience(campaignId, list);
+        }
+        const seen = new Set<string>();
+        const merged: AudienceRow[] = [];
+        for (const row of [...listLocalAudience(), ...server]) {
+          if (seen.has(row.handle)) continue;
+          seen.add(row.handle);
+          merged.push(row);
+        }
+        setRows(merged);
+      })
+      .catch(() => setRows(listLocalAudience()));
   }, []);
 
   const filtered = useMemo(() => {
@@ -55,7 +78,7 @@ function AudiencePage() {
       </div>
       {filtered.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-fg/15 p-10 text-center">
-          <p className="text-sm text-muted">No one here yet. Create a campaign with seed Instagram accounts — Sender pulls their real followers.</p>
+          <p className="text-sm text-muted">No one here yet. Create a campaign with seed Instagram accounts — Sender pulls their real crowd.</p>
           <Link to="/app/campaigns/new">
             <Button className="mt-5">New campaign</Button>
           </Link>

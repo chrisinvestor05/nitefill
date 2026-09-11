@@ -9,7 +9,7 @@ const STEPS = [
   {
     n: "02",
     t: "Pick seed accounts",
-    d: "Public pages whose followers look like your night. Sender pulls those real followers into your campaign.",
+    d: "Public pages whose crowd looks like your night. Sender pulls their followers, following, likes and comments into your campaign.",
   },
   {
     n: "03",
