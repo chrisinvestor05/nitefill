@@ -1,10 +1,12 @@
-Nitefill Sender — install in Chrome
+Nitefill Sender 1.2 — install in Chrome
 
 1. Unzip this folder if needed. You want the folder that contains manifest.json.
 2. In Chrome open chrome://extensions
 3. Turn on Developer mode (top right).
-4. Click "Load unpacked" and choose this folder.
-5. Sign in to Instagram in Chrome (the real instagram.com tab).
-6. Open your Nitefill dashboard. The extension pairs itself — no password is ever asked.
+4. If an older Nitefill Sender is already there, Remove it first.
+5. Click "Load unpacked" and choose this folder.
+6. Open https://nitefill.vercel.app in a normal Chrome tab (not a preview frame).
+7. Sign in, go to Instagram in the dashboard. It should say paired/online.
+8. If it does not, copy the pairing code from that page and paste it in this extension's popup.
 
-Keep the Instagram tab open while a campaign runs. SafeSend drips one invite at a time from YOUR account.
+Keep instagram.com signed in. Finding followers and sending both happen in that tab.

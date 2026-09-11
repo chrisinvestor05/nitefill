@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { getSenderStatus, queueTestSend, rotateExtensionToken, type SenderStatus } from "@/lib/server/sender";
+import { getSenderStatus, queueTestSend, type SenderStatus } from "@/lib/server/sender";
+import { enqueueSenderJob, pairingCode, useExtensionLive } from "@/components/app/sender-live";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -11,11 +12,13 @@ export const Route = createFileRoute("/app/connect")({
 });
 
 function ConnectPage() {
+  const live = useExtensionLive();
   const [status, setStatus] = useState<SenderStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [handle, setHandle] = useState("");
   const [testNote, setTestNote] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
 
   async function load() {
     try {
@@ -28,15 +31,20 @@ function ConnectPage() {
 
   useEffect(() => {
     void load();
-    const t = setInterval(() => void load(), 4000);
+    const t = setInterval(() => void load(), 8000);
     return () => clearInterval(t);
   }, []);
 
-  async function rotate() {
-    setBusy(true);
-    await rotateExtensionToken();
-    await load();
-    setBusy(false);
+  const paired = live.paired || Boolean(status?.online);
+  const online = Boolean(live.igHandle) || Boolean(status?.online && status?.instagramHandle);
+  const who = live.igHandle || status?.instagramHandle || "";
+
+  async function copyPair() {
+    const code = pairingCode();
+    if (!code) return;
+    await navigator.clipboard.writeText(code);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 2000);
   }
 
   async function onTest(e: FormEvent) {
@@ -46,7 +54,12 @@ function ConnectPage() {
     setTestNote(null);
     try {
       const res = await queueTestSend({ data: { handle } });
-      setTestNote(res.message);
+      if (res.job) enqueueSenderJob(res.job);
+      setTestNote(
+        live.paired
+          ? `Sending to @${res.handle} now. Watch the Instagram tab.`
+          : res.message,
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not queue the DM.");
     } finally {
@@ -54,12 +67,8 @@ function ConnectPage() {
     }
   }
 
-  if (!status) {
-    return (
-      <div className="space-y-3">
-        <p className="text-muted">{error ? error : "Loading…"}</p>
-      </div>
-    );
+  if (!status && !error) {
+    return <p className="text-muted">Loading…</p>;
   }
 
   return (
@@ -67,35 +76,53 @@ function ConnectPage() {
       <div>
         <h1 className="text-3xl">Instagram</h1>
         <p className="mt-2 text-sm text-muted">
-          Nitefill never asks for your password. Nitefill Sender sits in Chrome,
-          uses the Instagram account you are already signed into, and sends the
-          invite from that tab — the same way getkrowded does.
+          Nitefill never asks for your password. Sender uses the Instagram account
+          already signed in on this Chrome.
         </p>
       </div>
+
+      {live.inFrame && (
+        <aside className="rounded-2xl border border-orange/30 bg-orange/8 p-5">
+          <p className="font-medium text-fg">Open this in a real Chrome tab</p>
+          <p className="mt-1 text-sm text-muted">
+            Pairing inside a preview frame is unreliable. Open{" "}
+            <a className="text-teal hover:underline" href="https://nitefill.vercel.app/app/connect" target="_blank" rel="noreferrer">
+              nitefill.vercel.app/app/connect
+            </a>{" "}
+            in Chrome, then load the extension.
+          </p>
+        </aside>
+      )}
 
       <div className="rounded-2xl border border-fg/8 bg-surface p-6">
         <div className="flex items-center justify-between gap-3">
           <p className="text-sm text-subtle">Sender</p>
-          <Badge tone={status.online ? "success" : "muted"}>
-            {status.online ? "online" : "offline"}
+          <Badge tone={online ? "success" : paired ? "teal" : "muted"}>
+            {online ? "online" : paired ? "paired" : live.installed === false ? "not found" : "waiting"}
           </Badge>
         </div>
-        {status.online && status.instagramHandle ? (
-          <p className="mt-3 text-lg text-fg">Sending as @{status.instagramHandle}</p>
-        ) : (
+        {online && who ? (
+          <p className="mt-3 text-lg text-fg">Sending as @{who}</p>
+        ) : paired ? (
+          <p className="mt-3 text-sm text-muted">Paired. Open instagram.com in this Chrome and sign in.</p>
+        ) : live.installed === false ? (
           <p className="mt-3 text-sm text-muted">
-            Install the extension, then keep instagram.com open in this Chrome.
+            Chrome does not see Nitefill Sender yet. Download it, Load unpacked, then refresh this page.
           </p>
+        ) : (
+          <p className="mt-3 text-sm text-muted">Waiting for the extension on this page…</p>
         )}
+        {live.lastJob ? <p className="mt-2 text-xs text-teal">{live.lastJob}</p> : null}
+        {live.lastError ? <p className="mt-2 text-xs text-danger">{live.lastError}</p> : null}
       </div>
 
       <ol className="space-y-4">
         <li className="rounded-2xl border border-fg/8 bg-surface p-5">
           <p className="text-xs text-orange">01</p>
-          <h2 className="mt-1 text-lg">Download Nitefill Sender</h2>
+          <h2 className="mt-1 text-lg">Download Nitefill Sender 1.2</h2>
           <p className="mt-2 text-sm text-muted">
-            Unzip it. In Chrome open chrome://extensions, turn on Developer mode,
-            click Load unpacked, and choose the unzipped folder.
+            If you already installed an older copy, remove it first. Unzip, then
+            chrome://extensions → Developer mode → Load unpacked.
           </p>
           <a href="/nitefill-sender.zip" download className="mt-4 inline-block">
             <Button>Download for Chrome</Button>
@@ -105,26 +132,26 @@ function ConnectPage() {
           <p className="text-xs text-orange">02</p>
           <h2 className="mt-1 text-lg">Sign in to Instagram in Chrome</h2>
           <p className="mt-2 text-sm text-muted">
-            The real Instagram website, same Chrome as the extension. Leave that
-            tab open while a campaign runs. You will see the profile open and the
-            message leave.
+            Leave that tab open. Sender reads followers and sends from it.
           </p>
         </li>
         <li className="rounded-2xl border border-fg/8 bg-surface p-5">
           <p className="text-xs text-orange">03</p>
-          <h2 className="mt-1 text-lg">Come back here</h2>
+          <h2 className="mt-1 text-lg">Pair</h2>
           <p className="mt-2 text-sm text-muted">
-            This page pairs automatically. When the badge says online, you are
-            sending as the Instagram account in that tab.
+            This page pairs automatically. If it does not, copy the code and paste
+            it in the extension popup under “Pair manually”.
           </p>
+          <Button variant="ghost" className="mt-3" type="button" onClick={copyPair}>
+            {copied ? "Copied" : "Copy pairing code"}
+          </Button>
         </li>
       </ol>
 
       <form onSubmit={onTest} className="rounded-2xl border border-teal/25 bg-teal/5 p-5 space-y-3">
         <h2 className="text-lg">Send a real DM now</h2>
         <p className="text-sm text-muted">
-          Pick any public Instagram username you are allowed to message. Sender
-          will send it from YOUR logged-in account — not a mock.
+          Any public username you are allowed to message. Goes out from YOUR account.
         </p>
         <label className="block text-sm text-muted">
           Instagram username
@@ -137,7 +164,7 @@ function ConnectPage() {
           />
         </label>
         <Button type="submit" disabled={busy || !handle.trim()}>
-          {busy ? "Queuing…" : "Queue real DM"}
+          {busy ? "Sending…" : "Send now"}
         </Button>
         {testNote && <p className="text-sm text-teal">{testNote}</p>}
       </form>
@@ -145,11 +172,7 @@ function ConnectPage() {
       {error && <p className="text-sm text-danger">{error}</p>}
 
       <p className="text-xs text-subtle">
-        Pairing token ends with {status.tokenHint ? `…${status.tokenHint}` : "—"}.{" "}
-        <button type="button" className="text-teal hover:underline" onClick={rotate} disabled={busy}>
-          Rotate token
-        </button>
-        . More detail in the{" "}
+        More detail in the{" "}
         <Link to="/extension" className="text-teal hover:underline">
           setup guide
         </Link>

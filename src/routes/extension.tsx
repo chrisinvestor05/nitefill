@@ -22,8 +22,8 @@ function ExtensionPage() {
       d: "That is the whole connection. Nitefill never sees your password. The dashboard shows the account the moment Sender sees it.",
     },
     {
-      t: "Launch a campaign and leave the tab open",
-      d: "Invitations go out one at a time, from your account, in your browser, with SafeSend gaps so it does not look like a blast.",
+      t: "Come back to Nitefill in a Chrome tab",
+      d: "Open nitefill.vercel.app — not a preview frame. The page pairs itself. If it does not, copy the pairing code and paste it in the extension popup.",
     },
   ];
   return (

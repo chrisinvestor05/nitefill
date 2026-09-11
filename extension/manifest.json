@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Nitefill Sender",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Sends Nitefill campaign invites from your own logged-in Instagram tab. Never asks for your password.",
   "icons": {
     "16": "icons/icon16.png",
@@ -37,7 +37,7 @@
     {
       "matches": ["https://*/*", "http://127.0.0.1/*", "http://localhost/*"],
       "js": ["content-dash.js"],
-      "run_at": "document_idle",
+      "run_at": "document_start",
       "all_frames": true
     }
   ]

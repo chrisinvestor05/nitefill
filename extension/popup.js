@@ -8,7 +8,9 @@ function paint(s) {
   const paired = Boolean(s.origin && s.token);
   badge.textContent = paired ? "Paired" : "Not paired";
   badge.classList.toggle("off", !paired);
-  ig.textContent = s.igHandle ? `Instagram @${s.igHandle}` : "Open instagram.com in this Chrome and sign in.";
+  ig.textContent = s.igHandle
+    ? `Instagram @${s.igHandle}`
+    : "Open instagram.com in this Chrome and sign in.";
   job.textContent = s.lastJob || "";
   err.textContent = s.lastError || "";
   enabled.checked = s.enabled !== false;
@@ -30,5 +32,37 @@ document.getElementById("tick").addEventListener("click", async () => {
   paint(s || {});
 });
 
+document.getElementById("pairbtn").addEventListener("click", async () => {
+  const raw = document.getElementById("pair").value.trim();
+  if (!raw) return;
+  let origin = "";
+  let token = "";
+  try {
+    if (raw.startsWith("{")) {
+      const parsed = JSON.parse(raw);
+      origin = parsed.origin;
+      token = parsed.token;
+    } else if (raw.includes("#")) {
+      const i = raw.indexOf("#");
+      origin = raw.slice(0, i);
+      token = raw.slice(i + 1);
+    } else if (raw.includes("|")) {
+      const parts = raw.split("|");
+      origin = parts[0];
+      token = parts.slice(1).join("|");
+    }
+  } catch {
+    err.textContent = "Could not read that pairing code.";
+    return;
+  }
+  if (!origin || !token) {
+    err.textContent = "Pairing code should look like https://nitefill.vercel.app#nf1…";
+    return;
+  }
+  const s = await chrome.runtime.sendMessage({ type: "PAIR", origin, token });
+  paint(s && s.origin ? s : { origin, token, lastJob: "Paired", lastError: "" });
+  err.textContent = "";
+});
+
 void refresh();
-setInterval(refresh, 2000);
+setInterval(refresh, 1500);

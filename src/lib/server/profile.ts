@@ -83,8 +83,9 @@ export const ensureProfile = createServerFn({ method: "POST" })
             ? data.billingCycle
             : undefined;
       if (!existing[0].extension_token) {
+        const token = await mintExtensionToken(context.userId);
         await sql`
-          update profiles set extension_token = ${mintExtensionToken()}
+          update profiles set extension_token = ${token}
           where user_id = ${context.userId}
         `;
       }
@@ -107,7 +108,7 @@ export const ensureProfile = createServerFn({ method: "POST" })
 
     const plan = planById(data.planId ?? "pro");
     const cycle: BillingCycle = data.billingCycle === "yearly" ? "yearly" : "monthly";
-    const token = mintExtensionToken();
+    const token = await mintExtensionToken(context.userId);
     const trialEnds = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
     await sql`
       insert into profiles (

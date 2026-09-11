@@ -5,8 +5,10 @@ import { ensureExtensionToken } from "@/lib/server/sender";
 export function SenderBridge() {
   useEffect(() => {
     let cancelled = false;
-    void (async () => {
-      for (let i = 0; i < 6 && !cancelled; i += 1) {
+    let timer: number | undefined;
+
+    async function publish() {
+      for (let i = 0; i < 8 && !cancelled; i += 1) {
         try {
           const res = await ensureExtensionToken();
           if (cancelled || !res?.token) throw new Error("no token");
@@ -23,12 +25,16 @@ export function SenderBridge() {
           window.dispatchEvent(new Event("nitefill-sender-pair"));
           return;
         } catch {
-          await new Promise((r) => setTimeout(r, 400));
+          await new Promise((r) => setTimeout(r, 350));
         }
       }
-    })();
+    }
+
+    void publish();
+    timer = window.setInterval(() => void publish(), 15000);
     return () => {
       cancelled = true;
+      if (timer) window.clearInterval(timer);
     };
   }, []);
   return null;

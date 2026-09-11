@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { createCampaign, discoverAudience } from "@/lib/server/campaigns";
+import { enqueueSenderJob } from "@/components/app/sender-live";
 import { Button } from "@/components/ui/button";
 import { Input, Textarea } from "@/components/ui/input";
 
@@ -47,7 +48,7 @@ function NewCampaign() {
           dailyLimit,
         },
       });
-      await discoverAudience({
+      const found = await discoverAudience({
         data: {
           campaignId: created.id,
           city,
@@ -57,6 +58,7 @@ function NewCampaign() {
           seedAccounts,
         },
       });
+      if (found.job) enqueueSenderJob(found.job);
       await navigate({ to: "/app/campaigns/$id", params: { id: created.id } });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not create campaign.");

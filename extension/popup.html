@@ -16,9 +16,14 @@
       <input type="checkbox" id="enabled" checked />
       Send while Instagram is open
     </label>
-    <button id="tick">Send next now</button>
+    <button id="tick">Work now</button>
+    <details id="manual">
+      <summary>Pair manually</summary>
+      <input id="pair" placeholder="Paste pairing code from Nitefill" />
+      <button id="pairbtn" type="button">Pair</button>
+    </details>
     <p class="hint">
-      Keep this Chrome signed into Instagram. Pairing happens automatically when you open your Nitefill dashboard.
+      Open Nitefill in a Chrome tab (not a preview frame). Keep Instagram signed in.
     </p>
     <script src="popup.js"></script>
   </body>

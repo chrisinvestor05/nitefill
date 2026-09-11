@@ -2,16 +2,13 @@ import { createServerFn } from "@tanstack/react-start";
 import { authMiddleware } from "@/lib/auth/middleware";
 import { getSql } from "@/lib/db";
 import { expectedSends, nextSendAtMs, personalizeTemplate } from "@/lib/personalize";
+import { mintSignedToken, userIdFromSignedToken } from "@/lib/ext-token";
 import { newId } from "./ids";
 
 const ONLINE_MS = 25_000;
 
-export function mintExtensionToken(): string {
-  const bytes = new Uint8Array(24);
-  crypto.getRandomValues(bytes);
-  let hex = "";
-  for (const b of bytes) hex += b.toString(16).padStart(2, "0");
-  return `nf_${hex}`;
+export async function mintExtensionToken(userId: string, nonce = "0"): Promise<string> {
+  return mintSignedToken(userId, nonce);
 }
 
 function senderOnline(lastSeen: string | null | undefined): boolean {
@@ -28,79 +25,131 @@ export type SenderStatus = {
   instagramConnected: boolean;
 };
 
+export type SenderJob =
+  | {
+      kind: "discover";
+      campaignId: string;
+      seeds: string[];
+      keywords: string[];
+      gender: string;
+      city: string;
+      genre: string;
+      limit: number;
+    }
+  | {
+      kind: "send";
+      campaignId: string;
+      audienceId: string;
+      handle: string;
+      displayName: string;
+      igPk: string | null;
+      message: string;
+    };
+
 export async function loadSenderStatus(
   sql: Awaited<ReturnType<typeof getSql>>,
   userId: string,
 ): Promise<SenderStatus> {
-  const rows = await sql<Record<string, unknown>>`
-    select extension_token, sender_last_seen, instagram_handle, instagram_connected
-    from profiles where user_id = ${userId} limit 1
-  `;
-  const row = rows[0];
-  if (!row) {
+  const token = await mintSignedToken(userId);
+  try {
+    const rows = await sql<Record<string, unknown>>`
+      select extension_token, sender_last_seen, instagram_handle, instagram_connected
+      from profiles where user_id = ${userId} limit 1
+    `;
+    const row = rows[0];
+    if (!row) {
+      return {
+        token,
+        tokenHint: token.slice(-6),
+        online: false,
+        lastSeen: null,
+        instagramHandle: null,
+        instagramConnected: false,
+      };
+    }
     return {
-      token: null,
-      tokenHint: null,
+      token,
+      tokenHint: token.slice(-6),
+      online: senderOnline(row.sender_last_seen ? String(row.sender_last_seen) : null),
+      lastSeen: row.sender_last_seen ? String(row.sender_last_seen) : null,
+      instagramHandle: row.instagram_handle ? String(row.instagram_handle) : null,
+      instagramConnected: Boolean(row.instagram_connected),
+    };
+  } catch {
+    return {
+      token,
+      tokenHint: token.slice(-6),
       online: false,
       lastSeen: null,
       instagramHandle: null,
       instagramConnected: false,
     };
   }
-  const token = row.extension_token ? String(row.extension_token) : null;
-  return {
-    token,
-    tokenHint: token ? token.slice(-6) : null,
-    online: senderOnline(row.sender_last_seen ? String(row.sender_last_seen) : null),
-    lastSeen: row.sender_last_seen ? String(row.sender_last_seen) : null,
-    instagramHandle: row.instagram_handle ? String(row.instagram_handle) : null,
-    instagramConnected: Boolean(row.instagram_connected),
-  };
 }
 
 export async function userIdForToken(token: string): Promise<string | null> {
   const trimmed = token.trim();
+  const signed = await userIdFromSignedToken(trimmed);
+  if (signed) return signed;
   if (!trimmed.startsWith("nf_")) return null;
-  const sql = await getSql();
-  const rows = await sql<{ user_id: string }>`
-    select user_id from profiles where extension_token = ${trimmed} limit 1
-  `;
-  return rows[0]?.user_id ?? null;
+  try {
+    const sql = await getSql();
+    const rows = await sql<{ user_id: string }>`
+      select user_id from profiles where extension_token = ${trimmed} limit 1
+    `;
+    return rows[0]?.user_id ?? null;
+  } catch {
+    return null;
+  }
 }
 
 export const getSenderStatus = createServerFn({ method: "GET" })
   .middleware([authMiddleware])
   .handler(async ({ context }) => {
-    const sql = await getSql();
-    return loadSenderStatus(sql, context.userId);
+    try {
+      const sql = await getSql();
+      return loadSenderStatus(sql, context.userId);
+    } catch {
+      const token = await mintSignedToken(context.userId);
+      return {
+        token,
+        tokenHint: token.slice(-6),
+        online: false,
+        lastSeen: null,
+        instagramHandle: null,
+        instagramConnected: false,
+      } satisfies SenderStatus;
+    }
   });
 
 export const ensureExtensionToken = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .handler(async ({ context }) => {
-    const sql = await getSql();
-    const existing = await sql<{ extension_token: string | null }>`
-      select extension_token from profiles where user_id = ${context.userId} limit 1
-    `;
-    if (!existing[0]) throw new Error("Profile not ready");
-    if (existing[0].extension_token) {
-      return { token: String(existing[0].extension_token) };
+    const token = await mintSignedToken(context.userId);
+    try {
+      const sql = await getSql();
+      await sql`
+        update profiles set extension_token = ${token} where user_id = ${context.userId}
+      `;
+    } catch {
+      /* pairing does not need the row */
     }
-    const token = mintExtensionToken();
-    await sql`
-      update profiles set extension_token = ${token} where user_id = ${context.userId}
-    `;
     return { token };
   });
 
 export const rotateExtensionToken = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .handler(async ({ context }) => {
-    const sql = await getSql();
-    const token = mintExtensionToken();
-    await sql`
-      update profiles set extension_token = ${token} where user_id = ${context.userId}
-    `;
+    const nonce = Date.now().toString(36);
+    const token = await mintSignedToken(context.userId, nonce);
+    try {
+      const sql = await getSql();
+      await sql`
+        update profiles set extension_token = ${token} where user_id = ${context.userId}
+      `;
+    } catch {
+      /* ignore */
+    }
     return { token };
   });
 
@@ -118,24 +167,28 @@ export async function recordHeartbeat(
   userId: string,
   data: { handle?: string; igPk?: string },
 ) {
-  const sql = await getSql();
   const handle = (data.handle || "").replace(/^@+/, "").trim() || null;
   const pk = data.igPk?.trim() || null;
   const now = new Date().toISOString();
-  if (handle) {
-    await sql`
-      update profiles set
-        sender_last_seen = ${now},
-        instagram_connected = true,
-        instagram_handle = ${handle},
-        sender_ig_pk = coalesce(${pk}, sender_ig_pk)
-      where user_id = ${userId}
-    `;
-  } else {
-    await sql`
-      update profiles set sender_last_seen = ${now}
-      where user_id = ${userId}
-    `;
+  try {
+    const sql = await getSql();
+    if (handle) {
+      await sql`
+        update profiles set
+          sender_last_seen = ${now},
+          instagram_connected = true,
+          instagram_handle = ${handle},
+          sender_ig_pk = coalesce(${pk}, sender_ig_pk)
+        where user_id = ${userId}
+      `;
+    } else {
+      await sql`
+        update profiles set sender_last_seen = ${now}
+        where user_id = ${userId}
+      `;
+    }
+  } catch {
+    /* Vercel without a durable DB still accepts the heartbeat */
   }
   return { ok: true as const, now, handle };
 }
@@ -188,7 +241,7 @@ export async function pullWork(userId: string) {
       gender: String(camp.gender_filter || "all"),
       city: String(camp.city || ""),
       genre: String(camp.genre || ""),
-      limit: 50,
+      limit: 18,
     };
   }
 
@@ -282,7 +335,8 @@ export async function pullWork(userId: string) {
         set status = ${"sending"}
         where id = ${String(person.id)} and user_id = ${userId} and status = ${"queued"}
       `;
-    }    return {
+    }
+    return {
       kind: "send" as const,
       campaignId,
       audienceId: String(person.id),
@@ -306,7 +360,9 @@ export async function ingestDiscovered(
   const camp = await sql<Record<string, unknown>>`
     select * from campaigns where id = ${campaignId} and user_id = ${userId} limit 1
   `;
-  if (!camp[0]) throw new Error("Campaign not found");
+  if (!camp[0]) {
+    return { added: 0, missing: true as const };
+  }
 
   if (error) {
     await sql`
@@ -385,7 +441,7 @@ export async function completeSend(
     limit 1
   `;
   const person = rows[0];
-  if (!person) throw new Error("Audience row not found");
+  if (!person) return { ok: data.ok } as const;
 
   if (!data.ok) {
     await sql`
@@ -498,6 +554,7 @@ export const queueTestSend = createServerFn({ method: "POST" })
     const message =
       (data.message || "").trim() ||
       `hey — testing Nitefill from my account. if you got this, the sender is live.`;
+    let audienceId = existing[0]?.id;
     if (existing[0]) {
       await sql`
         update audience_profiles
@@ -505,21 +562,31 @@ export const queueTestSend = createServerFn({ method: "POST" })
         where id = ${existing[0].id} and user_id = ${context.userId}
       `;
     } else {
-      const id = newId("aud");
+      audienceId = newId("aud");
       await sql`
         insert into audience_profiles (
           id, user_id, campaign_id, handle, display_name, match_score, status, message
         ) values (
-          ${id}, ${context.userId}, ${campaignId}, ${handle}, ${handle}, ${99}, ${"queued"}, ${message}
+          ${audienceId}, ${context.userId}, ${campaignId}, ${handle}, ${handle}, ${99}, ${"queued"}, ${message}
         )
       `;
     }
+    const job: SenderJob = {
+      kind: "send",
+      campaignId,
+      audienceId: String(audienceId),
+      handle,
+      displayName: handle,
+      igPk: null,
+      message,
+    };
     return {
       campaignId,
       handle,
       senderOnline: sender.online,
+      job,
       message: sender.online
         ? `Queued. Keep instagram.com open — Sender will DM @${handle} from your account.`
-        : `Queued. Install Nitefill Sender, open Instagram, then this DM goes out as you.`,
+        : `Sender will DM @${handle} as soon as it is paired and Instagram is open.`,
     };
   });

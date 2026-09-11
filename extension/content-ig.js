@@ -21,6 +21,9 @@ function captureClaim(res) {
 
 async function igFetch(path, options = {}) {
   const url = path.startsWith("http") ? path : `https://www.instagram.com${path}`;
+  const { timeout = 5000, headers: extraHeaders, ...rest } = options;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeout);
   const headers = {
     "X-CSRFToken": csrf(),
     "X-IG-App-ID": IG_APP_ID,
@@ -29,26 +32,34 @@ async function igFetch(path, options = {}) {
     "X-IG-WWW-Claim": wwwClaim || "0",
     Accept: "*/*",
     Referer: location.href,
-    ...(options.headers || {}),
+    ...(extraHeaders || {}),
   };
-  const res = await fetch(url, {
-    credentials: "include",
-    ...options,
-    headers,
-  });
-  captureClaim(res);
-  const text = await res.text();
-  let json = null;
   try {
-    json = text ? JSON.parse(text) : null;
-  } catch {
-    json = { raw: text.slice(0, 400) };
+    const res = await fetch(url, {
+      credentials: "include",
+      ...rest,
+      headers,
+      signal: ctrl.signal,
+    });
+    captureClaim(res);
+    const text = await res.text();
+    let json = null;
+    try {
+      json = text ? JSON.parse(text) : null;
+    } catch {
+      json = { raw: text.slice(0, 400) };
+    }
+    if (!res.ok) {
+      const msg = json?.message || json?.error || json?.spam || `Instagram ${res.status}`;
+      throw new Error(typeof msg === "string" ? msg : `Instagram ${res.status}`);
+    }
+    return json;
+  } catch (err) {
+    if (err && err.name === "AbortError") throw new Error("Instagram timed out");
+    throw err;
+  } finally {
+    clearTimeout(timer);
   }
-  if (!res.ok) {
-    const msg = json?.message || json?.error || json?.spam || `Instagram ${res.status}`;
-    throw new Error(typeof msg === "string" ? msg : `Instagram ${res.status}`);
-  }
-  return json;
 }
 
 async function whoami() {
@@ -97,31 +108,26 @@ async function lookup(username) {
   };
 }
 
-async function followersApi(userId, limit = 50) {
+async function followersApi(userId, limit = 18) {
   const out = [];
-  let maxId = "";
-  while (out.length < limit) {
-    const qs = new URLSearchParams({
-      count: "50",
-      search_surface: "follow_list_page",
+  const qs = new URLSearchParams({
+    count: String(Math.min(50, limit)),
+    search_surface: "follow_list_page",
+  });
+  const data = await igFetch(`/api/v1/friendships/${userId}/followers/?${qs.toString()}`, {
+    timeout: 4000,
+  });
+  const users = data.users || data.items || [];
+  for (const u of users) {
+    out.push({
+      handle: String(u.username || ""),
+      displayName: String(u.full_name || u.username || ""),
+      bio: String(u.biography || ""),
+      igPk: String(u.pk || u.id || ""),
+      isPrivate: Boolean(u.is_private),
+      recentPost: "",
     });
-    if (maxId) qs.set("max_id", maxId);
-    const data = await igFetch(`/api/v1/friendships/${userId}/followers/?${qs.toString()}`);
-    const users = data.users || data.items || [];
-    for (const u of users) {
-      out.push({
-        handle: String(u.username || ""),
-        displayName: String(u.full_name || u.username || ""),
-        bio: String(u.biography || ""),
-        igPk: String(u.pk || u.id || ""),
-        isPrivate: Boolean(u.is_private),
-        recentPost: "",
-      });
-      if (out.length >= limit) break;
-    }
-    const next = data.next_max_id || data.max_id;
-    if (!next || users.length === 0) break;
-    maxId = String(next);
+    if (out.length >= limit) break;
   }
   return out;
 }
@@ -147,26 +153,26 @@ function skipHandle(handle) {
   );
 }
 
-async function followersDom(limit = 50) {
+async function followersDom(limit = 18) {
   const link =
     document.querySelector('a[href$="/followers/"]') ||
     [...document.querySelectorAll("a")].find((a) => /followers/i.test(a.getAttribute("href") || ""));
   if (!link) throw new Error("Could not open the followers list on this profile.");
   link.click();
-  await sleep(1400);
+  await sleep(700);
 
-  const deadline = Date.now() + 12000;
+  const deadline = Date.now() + 4000;
   let dialog = null;
   while (Date.now() < deadline && !dialog) {
     dialog = document.querySelector('div[role="dialog"]');
-    if (!dialog) await sleep(200);
+    if (!dialog) await sleep(120);
   }
   if (!dialog) throw new Error("Instagram did not open the followers dialog.");
 
   const seen = new Set();
   const out = [];
   let stagnant = 0;
-  while (out.length < limit && stagnant < 10) {
+  while (out.length < limit && stagnant < 3) {
     const before = out.length;
     for (const a of dialog.querySelectorAll('a[href^="/"]')) {
       const href = a.getAttribute("href") || "";
@@ -188,10 +194,11 @@ async function followersDom(limit = 50) {
       });
       if (out.length >= limit) break;
     }
+    if (out.length >= 8) break;
     const scroller =
       [...dialog.querySelectorAll("div")].find((el) => el.scrollHeight - el.clientHeight > 80) || dialog;
     scroller.scrollTop = scroller.scrollHeight;
-    await sleep(550);
+    await sleep(280);
     if (out.length === before) stagnant += 1;
     else stagnant = 0;
   }

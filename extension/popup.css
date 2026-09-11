@@ -55,3 +55,27 @@ button {
   color: #8b9bb3;
   margin: 10px 0 0;
 }
+details {
+  margin-top: 10px;
+}
+summary {
+  cursor: pointer;
+  color: #00e6ff;
+  font-size: 12px;
+}
+#pair {
+  margin-top: 8px;
+  width: 100%;
+  box-sizing: border-box;
+  height: 32px;
+  border-radius: 8px;
+  border: 1px solid #ffffff22;
+  background: #061428;
+  color: #e8eef8;
+  padding: 0 8px;
+}
+#pairbtn {
+  margin-top: 8px;
+  background: #00e6ff;
+  color: #0a1d3e;
+}

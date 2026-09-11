@@ -289,13 +289,29 @@ export const discoverAudience = createServerFn({ method: "POST" })
         discover_error = ${null}
       where id = ${data.campaignId} and user_id = ${context.userId}
     `;
+    const seedList = seeds
+      .split(/[,\s]+/)
+      .map((s) => s.replace(/^@+/, "").trim())
+      .filter(Boolean);
     return {
       added: 0,
       pending: true as const,
       senderOnline: sender.online,
+      job: {
+        kind: "discover" as const,
+        campaignId: data.campaignId,
+        seeds: seedList,
+        keywords: String(data.keywords ?? campaign[0].bio_keywords ?? "")
+          .split(/[,\s]+/)
+          .filter(Boolean),
+        gender: String(data.gender ?? campaign[0].gender_filter ?? "all"),
+        city: String(data.city ?? campaign[0].city ?? ""),
+        genre: String(data.genre ?? campaign[0].genre ?? ""),
+        limit: 18,
+      },
       message: sender.online
         ? "Nitefill Sender is pulling followers from Instagram now. Keep the Instagram tab open."
-        : "Queued. Open Chrome with Nitefill Sender and Instagram signed in — it will pull the followers itself.",
+        : "Looking for Sender. Keep this tab and Instagram open — followers land here as soon as they are found.",
     };
   });
 
@@ -365,7 +381,28 @@ export const startCampaign = createServerFn({ method: "POST" })
       set status = ${"running"}, started_at = ${startedAt}
       where id = ${data.id} and user_id = ${context.userId}
     `;
-    return { ok: true as const, startedAt };
+    return {
+      ok: true as const,
+      startedAt,
+      discover:
+        Number(queued[0]?.n ?? 0) === 0 && seeds
+          ? {
+              kind: "discover" as const,
+              campaignId: data.id,
+              seeds: seeds
+                .split(/[,\s]+/)
+                .map((s) => s.replace(/^@+/, "").trim())
+                .filter(Boolean),
+              keywords: String(rows[0].bio_keywords || "")
+                .split(/[,\s]+/)
+                .filter(Boolean),
+              gender: String(rows[0].gender_filter || "all"),
+              city: String(rows[0].city || ""),
+              genre: String(rows[0].genre || ""),
+              limit: 18,
+            }
+          : null,
+    };
   });
 
 export const pauseCampaign = createServerFn({ method: "POST" })
