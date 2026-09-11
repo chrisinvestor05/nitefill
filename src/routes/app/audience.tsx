@@ -33,7 +33,7 @@ function AudiencePage() {
       <div>
         <h1 className="text-3xl">Audience</h1>
         <p className="mt-2 text-sm text-muted">
-          People already attached to your campaigns. Search and filter — this is your room, not a bought list.
+          People already attached to your campaigns. These are real Instagram accounts Sender pulled from your seeds — not a bought list.
         </p>
       </div>
       <div className="flex flex-wrap gap-3">
@@ -55,7 +55,7 @@ function AudiencePage() {
       </div>
       {filtered.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-fg/15 p-10 text-center">
-          <p className="text-sm text-muted">No one here yet. Create a campaign to discover people near you.</p>
+          <p className="text-sm text-muted">No one here yet. Create a campaign with seed Instagram accounts — Sender pulls their real followers.</p>
           <Link to="/app/campaigns/new">
             <Button className="mt-5">New campaign</Button>
           </Link>

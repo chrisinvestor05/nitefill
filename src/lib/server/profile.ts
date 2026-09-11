@@ -3,6 +3,7 @@ import { authMiddleware } from "@/lib/auth/middleware";
 import { getSql } from "@/lib/db";
 import { planById, type BillingCycle, type PlanId } from "@/data/content";
 import { lookupPromo } from "@/lib/promos";
+import { mintExtensionToken } from "./sender";
 
 export type Profile = {
   userId: string;
@@ -81,6 +82,12 @@ export const ensureProfile = createServerFn({ method: "POST" })
           : data.billingCycle === "yearly" || data.billingCycle === "monthly"
             ? data.billingCycle
             : undefined;
+      if (!existing[0].extension_token) {
+        await sql`
+          update profiles set extension_token = ${mintExtensionToken()}
+          where user_id = ${context.userId}
+        `;
+      }
       if (planId || cycle || data.name || data.email) {
         await sql`
           update profiles
@@ -100,10 +107,11 @@ export const ensureProfile = createServerFn({ method: "POST" })
 
     const plan = planById(data.planId ?? "pro");
     const cycle: BillingCycle = data.billingCycle === "yearly" ? "yearly" : "monthly";
+    const token = mintExtensionToken();
     const trialEnds = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
     await sql`
       insert into profiles (
-        user_id, name, email, plan_id, billing_cycle, trial_ends_at, plan_status, daily_limit
+        user_id, name, email, plan_id, billing_cycle, trial_ends_at, plan_status, daily_limit, extension_token
       ) values (
         ${context.userId},
         ${data.name ?? null},
@@ -112,7 +120,8 @@ export const ensureProfile = createServerFn({ method: "POST" })
         ${cycle},
         ${trialEnds},
         ${"trial"},
-        ${35}
+        ${35},
+        ${token}
       )
     `;
     const created = await sql<Record<string, unknown>>`

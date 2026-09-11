@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { dashboardStats, listCampaigns, processSends, seedSampleCampaign, type Campaign } from "@/lib/server/campaigns";
+import { dashboardStats, listCampaigns, seedSampleCampaign, type Campaign } from "@/lib/server/campaigns";
 import { getProfile, type Profile } from "@/lib/server/profile";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -29,22 +29,9 @@ function OverviewPage() {
   }
 
   useEffect(() => {
-    let cancelled = false;
-    async function tick() {
-      try {
-        await processSends({ data: {} });
-        if (cancelled) return;
-        await load();
-      } catch {
-        if (!cancelled) await load();
-      }
-    }
-    void tick();
-    const timer = setInterval(() => void tick(), 5000);
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
-    };
+    void load();
+    const timer = setInterval(() => void load(), 5000);
+    return () => clearInterval(timer);
   }, []);
 
   async function sample() {
@@ -52,7 +39,6 @@ function OverviewPage() {
     setError(null);
     try {
       const created = await seedSampleCampaign();
-      await processSends({ data: { campaignId: created.id } });
       await navigate({ to: "/app/campaigns/$id", params: { id: created.id } });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not start the sample night.");
@@ -71,9 +57,9 @@ function OverviewPage() {
           <p className="text-sm text-teal">Overview</p>
           <h1 className="mt-1 text-3xl">Your room</h1>
           <p className="mt-2 text-sm text-muted">
-            {profile?.instagramConnected
-              ? `Sending as @${profile.instagramHandle}`
-              : "Connect Instagram to send from your own account — or start a sample night now."}
+            {stats?.senderOnline
+              ? `Sender online${stats.instagramHandle ? ` as @${stats.instagramHandle}` : ""}. Invites leave from your Instagram tab.`
+              : "Install Nitefill Sender in Chrome and sign in to Instagram — that's how real DMs go out."}
           </p>
         </div>
         <div className="flex gap-2">

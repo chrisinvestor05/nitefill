@@ -6,14 +6,13 @@ import {
   listAudience,
   listOutreach,
   pauseCampaign,
-  processSends,
   startCampaign,
   type AudienceRow,
   type Campaign,
   type OutreachRow,
 } from "@/lib/server/campaigns";
+import { getSenderStatus, type SenderStatus } from "@/lib/server/sender";
 import { rewriteInvite } from "@/lib/server/ai";
-import { getProfile, type Profile } from "@/lib/server/profile";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { personalizeTemplate } from "@/lib/personalize";
@@ -26,7 +25,7 @@ export const Route = createFileRoute("/app/campaigns/$id")({
 function statusTone(status: string) {
   if (status === "running") return "success" as const;
   if (status === "completed") return "teal" as const;
-  if (status === "paused") return "orange" as const;
+  if (status === "paused" || status === "failed") return "orange" as const;
   return "muted" as const;
 }
 
@@ -35,44 +34,30 @@ function CampaignDetail() {
   const [campaign, setCampaign] = useState<Campaign | null>(null);
   const [audience, setAudience] = useState<AudienceRow[]>([]);
   const [logs, setLogs] = useState<OutreachRow[]>([]);
-  const [profile, setProfile] = useState<Profile | null>(null);
+  const [sender, setSender] = useState<SenderStatus | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
   const [previewSource, setPreviewSource] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [lastWave, setLastWave] = useState(0);
+  const [discoverMsg, setDiscoverMsg] = useState<string | null>(null);
 
   async function load() {
-    const [c, a, o, p] = await Promise.all([
+    const [c, a, o, s] = await Promise.all([
       getCampaign({ data: { id } }),
       listAudience({ data: { campaignId: id } }),
       listOutreach({ data: { campaignId: id } }),
-      getProfile(),
+      getSenderStatus(),
     ]);
     setCampaign(c);
     setAudience(a);
     setLogs(o);
-    setProfile(p);
+    setSender(s);
   }
 
   useEffect(() => {
-    let cancelled = false;
-    async function tick() {
-      try {
-        const res = await processSends({ data: { campaignId: id } });
-        if (cancelled) return;
-        if (res.sentNow > 0) setLastWave(res.sentNow);
-        await load();
-      } catch {
-        if (!cancelled) await load();
-      }
-    }
-    void tick();
-    const timer = setInterval(() => void tick(), 4000);
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
-    };
+    void load();
+    const timer = setInterval(() => void load(), 4000);
+    return () => clearInterval(timer);
   }, [id]);
 
   async function launch() {
@@ -80,8 +65,6 @@ function CampaignDetail() {
     setError(null);
     try {
       await startCampaign({ data: { id } });
-      const res = await processSends({ data: { campaignId: id } });
-      setLastWave(res.sentNow);
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not launch.");
@@ -100,23 +83,31 @@ function CampaignDetail() {
   async function rediscover() {
     if (!campaign) return;
     setBusy(true);
-    await discoverAudience({
-      data: {
-        campaignId: id,
-        city: campaign.city,
-        gender: campaign.genderFilter,
-        genre: campaign.genre ?? undefined,
-        keywords: campaign.bioKeywords ?? undefined,
-      },
-    });
-    await load();
-    setBusy(false);
+    setError(null);
+    try {
+      const res = await discoverAudience({
+        data: {
+          campaignId: id,
+          city: campaign.city,
+          gender: campaign.genderFilter,
+          genre: campaign.genre ?? undefined,
+          keywords: campaign.bioKeywords ?? undefined,
+          seedAccounts: campaign.seedAccounts,
+        },
+      });
+      setDiscoverMsg(res.message);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not start discovery.");
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function previewOne(person: AudienceRow) {
     if (!campaign) return;
     setBusy(true);
-    const profileLike = {
+    const profile = {
       displayName: person.displayName,
       handle: person.handle,
       city: person.city || campaign.city,
@@ -126,7 +117,7 @@ function CampaignDetail() {
     };
     const fallback = personalizeTemplate(
       campaign.messageTemplate,
-      profileLike,
+      profile,
       campaign.eventName || campaign.name,
       campaign.city,
     );
@@ -136,7 +127,7 @@ function CampaignDetail() {
           template: campaign.messageTemplate,
           event: campaign.eventName || campaign.name,
           city: campaign.city,
-          profile: profileLike,
+          profile,
         },
       });
       setPreview(res.text);
@@ -153,10 +144,12 @@ function CampaignDetail() {
     return <p className="text-muted">Loading campaign…</p>;
   }
 
-  const canLaunch = campaign.status === "draft" || campaign.status === "paused";
-  const running = campaign.status === "running";
-  const total = campaign.queued + campaign.sent;
-  const progress = total > 0 ? Math.round((campaign.sent / total) * 100) : 0;
+  const total = campaign.queued + campaign.sent + campaign.failed;
+  const pct = total ? Math.round((campaign.sent / total) * 100) : 0;
+  const nextIn =
+    campaign.status === "running" && campaign.nextSendAt
+      ? Math.max(0, Math.round((new Date(campaign.nextSendAt).getTime() - Date.now()) / 1000))
+      : null;
 
   return (
     <div className="space-y-8">
@@ -171,94 +164,93 @@ function CampaignDetail() {
             {campaign.eventDate ? ` · ${campaign.eventDate}` : ""}
             {campaign.venue ? ` · ${campaign.venue}` : ""}
           </p>
+          {campaign.seedAccounts ? (
+            <p className="mt-1 text-xs text-subtle">Seeds @{campaign.seedAccounts.split(", ").join(" · @")}</p>
+          ) : null}
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap gap-2">
           <Badge tone={statusTone(campaign.status)}>
-            {running ? "SafeSend running" : campaign.status}
+            {campaign.status === "running" ? "SafeSend running" : campaign.status}
           </Badge>
-          {canLaunch && (
-            <Button onClick={launch} disabled={busy} size="lg">
-              {busy ? "Launching…" : campaign.status === "paused" ? "Resume SafeSend" : "Launch SafeSend"}
+          {campaign.status !== "running" && campaign.status !== "completed" && (
+            <Button onClick={launch} disabled={busy}>
+              {busy ? "Working…" : "Launch SafeSend"}
             </Button>
           )}
-          {running && (
+          {campaign.status === "running" && (
             <Button variant="ghost" onClick={pause} disabled={busy}>
               Pause
             </Button>
           )}
-          <Button variant="ghost" onClick={rediscover} disabled={busy || running}>
-            Refresh audience
+          <Button variant="ghost" onClick={rediscover} disabled={busy}>
+            Find followers
           </Button>
         </div>
       </div>
 
-      {canLaunch && (
+      {!sender?.online && (
         <aside className="rounded-2xl border border-orange/30 bg-orange/8 p-5">
-          <p className="text-sm font-medium text-fg">Ready to send</p>
-          <p className="mt-1 text-sm leading-relaxed text-muted">
-            {audience.length} people are queued. Launch sends the first five personal
-            invites now, then drips the rest over a couple of minutes so it doesn't
-            look like a blast. Stay on this page — Sent will climb on its own.
-          </p>
-        </aside>
-      )}
-
-      {running && (
-        <aside className="rounded-2xl border border-teal/30 bg-teal/8 p-5">
-          <p className="text-sm font-medium text-fg">SafeSend is live</p>
-          <p className="mt-1 text-sm leading-relaxed text-muted">
-            {lastWave > 0
-              ? `Just sent ${lastWave} more. `
-              : "First wave is out. "}
-            The rest drip with uneven gaps. Replies show up here — you still answer
-            them in Instagram.
-          </p>
-          <div className="mt-4 h-2 overflow-hidden rounded-full bg-panel">
-            <div
-              className="h-full rounded-full bg-teal transition-[width] duration-500"
-              style={{ width: `${progress}%` }}
-            />
-          </div>
-          <p className="mt-2 text-xs text-subtle">{progress}% of this list invited</p>
-        </aside>
-      )}
-
-      {campaign.status === "completed" && (
-        <aside className="rounded-2xl border border-fg/8 bg-surface p-5">
-          <p className="text-sm font-medium text-fg">This list is done</p>
+          <p className="font-medium text-fg">Nitefill Sender is offline</p>
           <p className="mt-1 text-sm text-muted">
-            Everyone queued has been invited. Open a new campaign for the next night,
-            or refresh the audience to find another room.
+            Real DMs leave from your Instagram tab. Install the Chrome extension, sign in to
+            Instagram, and come back — this campaign will wait.
+          </p>
+          <Link to="/app/connect" className="mt-3 inline-block text-sm text-teal hover:underline">
+            Connect Instagram
+          </Link>
+        </aside>
+      )}
+      {sender?.online && (
+        <aside className="rounded-2xl border border-teal/25 bg-teal/8 p-5">
+          <p className="text-sm font-medium text-teal">
+            Sender online{sender.instagramHandle ? ` · @${sender.instagramHandle}` : ""}
+          </p>
+          <p className="mt-1 text-sm text-muted">
+            {campaign.status === "running"
+              ? nextIn && nextIn > 0
+                ? `Next invite in about ${nextIn}s. Keep instagram.com open.`
+                : "SafeSend will send the next due invite from this Chrome."
+              : campaign.discoverStatus === "pending" || campaign.discoverStatus === "running"
+                ? "Pulling real followers from your seed accounts…"
+                : "Launch SafeSend when the list looks right."}
           </p>
         </aside>
       )}
 
       {error && <p className="text-sm text-danger">{error}</p>}
+      {discoverMsg && <p className="text-sm text-teal">{discoverMsg}</p>}
+      {campaign.discoverError && <p className="text-sm text-danger">{campaign.discoverError}</p>}
 
-      {profile && !profile.instagramConnected && (
-        <p className="text-sm text-subtle">
-          Invites are simulated in this workspace.{" "}
-          <Link to="/app/connect" className="text-teal hover:underline">
-            Connect a handle
-          </Link>{" "}
-          so the dashboard shows who you're sending as.
-        </p>
+      {total > 0 && (
+        <div>
+          <div className="mb-2 flex items-center justify-between text-xs text-subtle">
+            <span>{pct}% of this list invited</span>
+            <span>
+              {campaign.sent} / {total}
+            </span>
+          </div>
+          <div className="h-2 overflow-hidden rounded-full bg-panel">
+            <div className="h-full rounded-full bg-teal transition-[width] duration-500" style={{ width: `${pct}%` }} />
+          </div>
+        </div>
       )}
 
-      <div className="grid gap-3 sm:grid-cols-3">
+      <div className="grid gap-3 sm:grid-cols-4">
         {[
           ["Queued", campaign.queued],
           ["Sent", campaign.sent],
+          ["Failed", campaign.failed],
           ["Replies", campaign.replied],
         ].map(([l, v]) => (
           <div key={String(l)} className="rounded-2xl border border-fg/8 bg-surface p-5">
             <p className="text-xs text-subtle">{l}</p>
-            <p className="mt-1 font-display text-2xl tabular-nums" aria-live="polite">
+            <p className="mt-1 font-display text-2xl tabular-nums" aria-live={l === "Sent" ? "polite" : undefined}>
               {v}
             </p>
           </div>
         ))}
       </div>
+
       {preview && (
         <aside className="rounded-2xl border border-teal/30 bg-teal/5 p-5">
           <p className="text-xs text-teal">
@@ -267,15 +259,13 @@ function CampaignDetail() {
           <p className="mt-2 text-sm leading-relaxed text-muted">{preview}</p>
         </aside>
       )}
+
       <section>
         <h2 className="mb-3 text-xl">Audience</h2>
         {audience.length === 0 ? (
-          <div className="rounded-2xl border border-dashed border-fg/15 p-8 text-center">
-            <p className="text-sm text-muted">No matches yet.</p>
-            <Button className="mt-4" onClick={rediscover} disabled={busy}>
-              Find people in {campaign.city || "this city"}
-            </Button>
-          </div>
+          <p className="text-sm text-muted">
+            No followers yet. Add seed accounts and tap Find followers — Sender reads them from Instagram.
+          </p>
         ) : (
           <ul className="divide-y divide-fg/8 rounded-2xl border border-fg/8">
             {audience.map((p) => (
@@ -287,6 +277,7 @@ function CampaignDetail() {
                   </p>
                   <p className="text-xs text-subtle">
                     {p.city} · {p.matchScore}% match · {p.status}
+                    {p.failReason ? ` · ${p.failReason}` : ""}
                   </p>
                   <p className="mt-1 text-sm text-muted">{p.bio}</p>
                 </div>
@@ -299,10 +290,10 @@ function CampaignDetail() {
         )}
       </section>
       <section>
-        <h2 className="mb-3 text-xl">Sent</h2>
+        <h2 className="mb-3 text-xl">Sent from Instagram</h2>
         {logs.length === 0 ? (
           <p className="text-sm text-muted">
-            Nothing sent yet. Launch SafeSend — the first five go out immediately.
+            Nothing has left Instagram yet. Launch SafeSend and keep the Instagram tab open.
           </p>
         ) : (
           <ul className="space-y-3">
@@ -313,9 +304,7 @@ function CampaignDetail() {
                     {l.displayName ?? l.handle}{" "}
                     <span className="text-subtle">@{l.handle}</span>
                   </p>
-                  <Badge tone={l.replied ? "success" : "muted"}>
-                    {l.replied ? "replied" : "sent"}
-                  </Badge>
+                  <Badge tone={l.replied ? "success" : "muted"}>{l.replied ? "replied" : "sent"}</Badge>
                 </div>
                 <p className="text-sm leading-relaxed text-muted">{l.message}</p>
               </li>

@@ -5,7 +5,7 @@ import {
   FIRST_WAVE,
   firstNameOf,
   personalizeTemplate,
-  SAFESEND_RAMP_MS,
+  SAFESEND_GAP_MS,
 } from "./personalize.ts";
 
 describe("personalizeTemplate", () => {
@@ -44,7 +44,7 @@ describe("expectedSends", () => {
     );
   });
 
-  it("fires a first wave the moment SafeSend launches", () => {
+  it("fires the first DM the moment SafeSend launches", () => {
     assert.equal(
       expectedSends({ startedAtMs: 1000, nowMs: 1000, dailyLimit: 35, audienceCount: 80 }),
       FIRST_WAVE,
@@ -52,39 +52,38 @@ describe("expectedSends", () => {
   });
 
   it("caps at audience size", () => {
-    const day = 24 * 60 * 60 * 1000;
     const n = expectedSends({
       startedAtMs: 0,
-      nowMs: day * 10,
+      nowMs: SAFESEND_GAP_MS * 100,
       dailyLimit: 35,
       audienceCount: 12,
     });
     assert.equal(n, 12);
   });
 
-  it("ramps within the SafeSend window rather than dumping the daily limit", () => {
+  it("drips one DM per SafeSend gap rather than dumping the daily limit", () => {
     const early = expectedSends({
       startedAtMs: 0,
-      nowMs: Math.floor(SAFESEND_RAMP_MS * 0.25),
+      nowMs: SAFESEND_GAP_MS,
       dailyLimit: 35,
       audienceCount: 80,
     });
     const later = expectedSends({
       startedAtMs: 0,
-      nowMs: Math.floor(SAFESEND_RAMP_MS * 0.75),
+      nowMs: SAFESEND_GAP_MS * 8,
       dailyLimit: 35,
       audienceCount: 80,
     });
-    assert.ok(early >= FIRST_WAVE);
+    assert.equal(early, 2);
+    assert.equal(later, 9);
     assert.ok(early < later);
-    assert.ok(early < 20);
-    assert.ok(later < 35);
+    assert.ok(later < 20);
   });
 
-  it("reaches the daily cap by the end of the window", () => {
+  it("reaches the daily cap after enough gaps", () => {
     const n = expectedSends({
       startedAtMs: 0,
-      nowMs: SAFESEND_RAMP_MS,
+      nowMs: SAFESEND_GAP_MS * 50,
       dailyLimit: 35,
       audienceCount: 80,
     });

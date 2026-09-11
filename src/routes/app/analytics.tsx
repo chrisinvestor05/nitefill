@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import { listCampaigns, listOutreach, processSends, type Campaign, type OutreachRow } from "@/lib/server/campaigns";
+import { listCampaigns, listOutreach, type Campaign, type OutreachRow } from "@/lib/server/campaigns";
 
 export const Route = createFileRoute("/app/analytics")({
   component: AnalyticsPage,
@@ -12,12 +12,10 @@ function AnalyticsPage() {
   const [logs, setLogs] = useState<OutreachRow[]>([]);
 
   useEffect(() => {
-    void processSends({ data: {} }).then(() =>
-      Promise.all([listCampaigns(), listOutreach({ data: {} })]).then(([c, o]) => {
-        setCampaigns(c);
-        setLogs(o);
-      }),
-    );
+    void Promise.all([listCampaigns(), listOutreach({ data: {} })]).then(([c, o]) => {
+      setCampaigns(c);
+      setLogs(o);
+    });
   }, []);
 
   const totals = useMemo(() => {

@@ -5,15 +5,11 @@ export type ProfileLike = Pick<
   "displayName" | "handle" | "city" | "bio" | "recentPost" | "genreTags"
 > & { firstName?: string };
 
-/** First invites that go out the moment SafeSend launches. */
-export const FIRST_WAVE = 5;
+/** First real Instagram DM the moment SafeSend launches. */
+export const FIRST_WAVE = 1;
 
-/**
- * Demo SafeSend window — the day's cap drips over a couple of minutes so
- * a promoter watching the campaign actually sees it work. Copy still talks
- * about human pacing; the math just isn't a 14-hour wait.
- */
-export const SAFESEND_RAMP_MS = 2 * 60 * 1000;
+/** Minimum gap between real Instagram DMs (SafeSend). */
+export const SAFESEND_GAP_MS = 40 * 1000;
 
 export function firstNameOf(displayName: string): string {
   return displayName.trim().split(/\s+/)[0] ?? displayName;
@@ -85,6 +81,11 @@ export function personalizeTemplate(
   return `${lead}${notice} ${template.trim()}`.replace(/\s+/g, " ").trim();
 }
 
+/**
+ * How many Instagram DMs should already have gone for this campaign.
+ * First one is due at launch; the rest drip every SAFESEND_GAP_MS so it
+ * does not look like a blast (and Instagram is less likely to flag it).
+ */
 export function expectedSends(options: {
   startedAtMs: number;
   nowMs: number;
@@ -93,17 +94,22 @@ export function expectedSends(options: {
 }): number {
   const { startedAtMs, nowMs, dailyLimit, audienceCount } = options;
   if (nowMs < startedAtMs || dailyLimit <= 0 || audienceCount <= 0) return 0;
-  const firstWave = Math.min(FIRST_WAVE, dailyLimit, audienceCount);
   const elapsed = Math.max(0, nowMs - startedAtMs);
-  const dayMs = 24 * 60 * 60 * 1000;
-  const fullDays = Math.floor(elapsed / dayMs);
-  const msIntoDay = elapsed - fullDays * dayMs;
-  const activeFrac = Math.min(1, msIntoDay / SAFESEND_RAMP_MS);
-  const eased = activeFrac * activeFrac * (3 - 2 * activeFrac);
-  const raw = fullDays * dailyLimit + Math.floor(eased * dailyLimit);
-  return Math.max(firstWave, Math.min(audienceCount, raw));
+  const due = FIRST_WAVE + Math.floor(elapsed / SAFESEND_GAP_MS);
+  return Math.max(0, Math.min(audienceCount, dailyLimit, due));
 }
 
-export function shouldSimulateReply(handle: string, campaignId: string): boolean {
-  return hashString(handle + campaignId) % 100 < 18;
+export function nextSendAtMs(options: {
+  startedAtMs: number;
+  nowMs: number;
+  dailyLimit: number;
+  audienceCount: number;
+  alreadySent: number;
+}): number | null {
+  const target = expectedSends(options);
+  if (options.alreadySent >= Math.min(options.audienceCount, options.dailyLimit)) return null;
+  if (options.alreadySent < target) return options.nowMs;
+  const nextIndex = options.alreadySent; // 0-based due count already out
+  const when = options.startedAtMs + Math.max(0, nextIndex - FIRST_WAVE + 1) * SAFESEND_GAP_MS;
+  return when;
 }

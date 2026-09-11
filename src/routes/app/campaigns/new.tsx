@@ -19,6 +19,7 @@ function NewCampaign() {
   const [genre, setGenre] = useState("house");
   const [genderFilter, setGenderFilter] = useState("all");
   const [bioKeywords, setBioKeywords] = useState("");
+  const [seedAccounts, setSeedAccounts] = useState("fabriclondon, ministryofsound");
   const [messageTemplate, setMessageTemplate] = useState(
     "I'm putting on {event} in {city}. Reckon it'd be your kind of night?",
   );
@@ -41,6 +42,7 @@ function NewCampaign() {
           genre,
           genderFilter,
           bioKeywords,
+          seedAccounts,
           messageTemplate,
           dailyLimit,
         },
@@ -52,6 +54,7 @@ function NewCampaign() {
           gender: genderFilter,
           genre,
           keywords: bioKeywords,
+          seedAccounts,
         },
       });
       await navigate({ to: "/app/campaigns/$id", params: { id: created.id } });
@@ -66,15 +69,14 @@ function NewCampaign() {
       <div>
         <h1 className="text-3xl">New campaign</h1>
         <p className="mt-2 text-sm text-muted">
-          City, night, and one message. We'll find the people. On the next screen,
-          tap Launch SafeSend — the first five invites go out immediately.
+          Seed accounts whose followers look like your night. Nitefill Sender
+          pulls those real people from Instagram, then sends from your account.
         </p>
-        <p className="mt-2 text-sm text-subtle">
-          Want a working example first?{" "}
-          <Link to="/app" className="text-teal hover:underline">
-            Start a sample rooftop night from Overview
+        <p className="mt-2 text-xs text-subtle">
+          Sender not installed yet?{" "}
+          <Link to="/app/connect" className="text-teal hover:underline">
+            Connect Instagram
           </Link>
-          .
         </p>
       </div>
       <label className="block text-sm text-muted">
@@ -116,6 +118,19 @@ function NewCampaign() {
         </label>
       </div>
       <label className="block text-sm text-muted">
+        Seed Instagram accounts
+        <Input
+          className="mt-1.5"
+          required
+          value={seedAccounts}
+          onChange={(e) => setSeedAccounts(e.target.value)}
+          placeholder="fabriclondon, ministryofsound"
+        />
+        <span className="mt-1 block text-xs text-subtle">
+          Public accounts. Sender pulls their followers — never more than we'll message.
+        </span>
+      </label>
+      <label className="block text-sm text-muted">
         Bio keywords
         <Input className="mt-1.5" value={bioKeywords} onChange={(e) => setBioKeywords(e.target.value)} placeholder="fabric, rooftop, house" />
       </label>
@@ -137,7 +152,7 @@ function NewCampaign() {
       </label>
       {error && <p className="text-sm text-danger">{error}</p>}
       <Button type="submit" disabled={busy}>
-        {busy ? "Finding your crowd…" : "Find audience"}
+        {busy ? "Saving…" : "Save and find followers"}
       </Button>
     </form>
   );

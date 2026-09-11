@@ -8,6 +8,24 @@ export const Route = createFileRoute("/extension")({
 });
 
 function ExtensionPage() {
+  const steps = [
+    {
+      t: "Download Nitefill Sender",
+      d: "Unzip the folder. It contains manifest.json — that is the extension.",
+    },
+    {
+      t: "Load it in Chrome",
+      d: "chrome://extensions → Developer mode → Load unpacked → select the unzipped folder. Phones cannot run extensions.",
+    },
+    {
+      t: "Sign in to Instagram in that Chrome",
+      d: "That is the whole connection. Nitefill never sees your password. The dashboard shows the account the moment Sender sees it.",
+    },
+    {
+      t: "Launch a campaign and leave the tab open",
+      d: "Invitations go out one at a time, from your account, in your browser, with SafeSend gaps so it does not look like a blast.",
+    },
+  ];
   return (
     <SiteShell>
       <main className="mx-auto max-w-3xl px-4 pt-28 pb-20 sm:px-6 sm:pt-32">
@@ -15,23 +33,16 @@ function ExtensionPage() {
         <h1 className="mt-2">Nitefill Sender</h1>
         <p className="mt-4 text-muted">
           Sends your invitations from your own browser, signed in as you. Nothing
-          to paste, nothing to hand over.
+          to paste, nothing to hand over. This is how the messages actually leave
+          — not a simulation, not a third-party Instagram login.
         </p>
-        <ol className="mt-10 space-y-6">
-          {[
-            {
-              t: "Add Nitefill Sender to Chrome",
-              d: "One click from the Chrome Web Store. It sits quietly in your toolbar.",
-            },
-            {
-              t: "Open Instagram in the same Chrome and sign in",
-              d: "That is the whole connection. Your Nitefill dashboard shows the account the moment it sees it.",
-            },
-            {
-              t: "Launch a campaign",
-              d: "Invitations go out one at a time, from your account, in your browser, while the tab is open.",
-            },
-          ].map((s, i) => (
+        <div className="mt-8">
+          <a href="/nitefill-sender.zip" download>
+            <Button size="lg">Download Nitefill Sender</Button>
+          </a>
+        </div>
+        <ol className="mt-10 space-y-5">
+          {steps.map((s, i) => (
             <li key={s.t} className="rounded-2xl border border-fg/8 bg-surface p-5">
               <p className="text-xs text-orange">{String(i + 1).padStart(2, "0")}</p>
               <h2 className="mt-1 text-lg">{s.t}</h2>
@@ -39,17 +50,13 @@ function ExtensionPage() {
             </li>
           ))}
         </ol>
-        <div className="mt-10 rounded-2xl border border-fg/10 bg-surface p-6">
-          <p className="font-medium text-fg">Not on the Chrome Web Store yet.</p>
-          <p className="mt-2 text-sm text-muted">
-            Early customers get it directly from us. Get in touch and we will set you up.
-            Phones cannot run extensions — Google Chrome on a computer, Instagram
-            tab left open while a campaign runs.
-          </p>
-          <Link to="/contact" className="mt-4 inline-block">
-            <Button>Get in touch</Button>
+        <p className="mt-8 text-sm text-muted">
+          Already have an account?{" "}
+          <Link to="/app/connect" className="text-teal hover:underline">
+            Pair it from Instagram in the dashboard
           </Link>
-        </div>
+          .
+        </p>
       </main>
     </SiteShell>
   );

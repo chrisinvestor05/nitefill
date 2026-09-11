@@ -31,6 +31,7 @@ import { Route as AppSettingsRouteImport } from './routes/app/settings'
 import { Route as AuthLoginRouteImport } from './routes/auth/login'
 import { Route as AuthSignupRouteImport } from './routes/auth/signup'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
+import { Route as ApiExtSplatRouteImport } from './routes/api/ext/$'
 import { Route as AppCampaignsIndexRouteImport } from './routes/app/campaigns/index'
 import { Route as AppCampaignsIdRouteImport } from './routes/app/campaigns/$id'
 import { Route as AppCampaignsNewRouteImport } from './routes/app/campaigns/new'
@@ -145,6 +146,11 @@ const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
   path: '/api/auth/$',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiExtSplatRoute = ApiExtSplatRouteImport.update({
+  id: '/api/ext/$',
+  path: '/api/ext/$',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AppCampaignsIndexRoute = AppCampaignsIndexRouteImport.update({
   id: '/campaigns/',
   path: '/campaigns/',
@@ -184,6 +190,7 @@ export interface FileRoutesByFullPath {
   '/auth/signup': typeof AuthSignupRoute
   '/app/': typeof AppIndexRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/ext/$': typeof ApiExtSplatRoute
   '/app/campaigns/$id': typeof AppCampaignsIdRoute
   '/app/campaigns/new': typeof AppCampaignsNewRoute
   '/app/campaigns/': typeof AppCampaignsIndexRoute
@@ -210,6 +217,7 @@ export interface FileRoutesByTo {
   '/auth/signup': typeof AuthSignupRoute
   '/app': typeof AppIndexRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/ext/$': typeof ApiExtSplatRoute
   '/app/campaigns/$id': typeof AppCampaignsIdRoute
   '/app/campaigns/new': typeof AppCampaignsNewRoute
   '/app/campaigns': typeof AppCampaignsIndexRoute
@@ -238,6 +246,7 @@ export interface FileRoutesById {
   '/auth/signup': typeof AuthSignupRoute
   '/app/': typeof AppIndexRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/ext/$': typeof ApiExtSplatRoute
   '/app/campaigns/$id': typeof AppCampaignsIdRoute
   '/app/campaigns/new': typeof AppCampaignsNewRoute
   '/app/campaigns/': typeof AppCampaignsIndexRoute
@@ -267,6 +276,7 @@ export interface FileRouteTypes {
     | '/auth/signup'
     | '/app/'
     | '/api/auth/$'
+    | '/api/ext/$'
     | '/app/campaigns/$id'
     | '/app/campaigns/new'
     | '/app/campaigns/'
@@ -293,6 +303,7 @@ export interface FileRouteTypes {
     | '/auth/signup'
     | '/app'
     | '/api/auth/$'
+    | '/api/ext/$'
     | '/app/campaigns/$id'
     | '/app/campaigns/new'
     | '/app/campaigns'
@@ -320,6 +331,7 @@ export interface FileRouteTypes {
     | '/auth/signup'
     | '/app/'
     | '/api/auth/$'
+    | '/api/ext/$'
     | '/app/campaigns/$id'
     | '/app/campaigns/new'
     | '/app/campaigns/'
@@ -342,6 +354,7 @@ export interface RootRouteChildren {
   AuthLoginRoute: typeof AuthLoginRoute
   AuthSignupRoute: typeof AuthSignupRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
+  ApiExtSplatRoute: typeof ApiExtSplatRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -500,6 +513,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiAuthSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/ext/$': {
+      id: '/api/ext/$'
+      path: '/api/ext/$'
+      fullPath: '/api/ext/$'
+      preLoaderRoute: typeof ApiExtSplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/app/campaigns/': {
       id: '/app/campaigns/'
       path: '/campaigns'
@@ -569,6 +589,7 @@ const rootRouteChildren: RootRouteChildren = {
   AuthLoginRoute: AuthLoginRoute,
   AuthSignupRoute: AuthSignupRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
+  ApiExtSplatRoute: ApiExtSplatRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

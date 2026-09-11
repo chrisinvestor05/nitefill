@@ -14,8 +14,9 @@ import { useCurrentUserState } from "@/lib/auth/use-current-user";
 import { Wordmark } from "@/components/brand/logo";
 import { AuthSlot } from "@/components/layout/auth-slot";
 import { cn } from "@/lib/utils";
-import { ensureProfile, redeemPromo } from "@/lib/server/profile";
 import { processSends } from "@/lib/server/campaigns";
+import { ensureProfile, redeemPromo } from "@/lib/server/profile";
+import { SenderBridge } from "@/components/app/sender-bridge";
 import { lookupPromo, PROMO_STORAGE_KEY } from "@/lib/promos";
 
 const LINKS = [
@@ -129,6 +130,7 @@ export function AppShell() {
           ))}
         </nav>
         <main className="min-w-0 flex-1 px-4 py-6 sm:px-6 lg:px-8">
+          <SenderBridge />
           <Outlet />
         </main>
       </div>

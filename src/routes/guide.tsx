@@ -10,7 +10,7 @@ function GuidePage() {
   const steps = [
     {
       t: "Connect through Chrome",
-      d: "Be logged into Instagram on Chrome, then sync the extension. Sends from your account, no password needed.",
+      d: "Install Nitefill Sender, then sign in to Instagram in that same Chrome. Sends from your account. No password handed over.",
     },
     {
       t: "Pick seed accounts",
