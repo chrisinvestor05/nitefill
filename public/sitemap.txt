@@ -1,0 +1,10 @@
+/
+/signup
+/login
+/contact
+/pricing
+/terms
+/privacy
+/legal
+/extension
+/guide
