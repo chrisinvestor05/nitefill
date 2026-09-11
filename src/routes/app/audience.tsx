@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { listAudience, type AudienceRow } from "@/lib/server/campaigns";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 
 export const Route = createFileRoute("/app/audience")({
   component: AudiencePage,
@@ -53,7 +54,12 @@ function AudiencePage() {
         </select>
       </div>
       {filtered.length === 0 ? (
-        <p className="text-sm text-muted">No one here yet. Create a campaign to discover people near you.</p>
+        <div className="rounded-2xl border border-dashed border-fg/15 p-10 text-center">
+          <p className="text-sm text-muted">No one here yet. Create a campaign to discover people near you.</p>
+          <Link to="/app/campaigns/new">
+            <Button className="mt-5">New campaign</Button>
+          </Link>
+        </div>
       ) : (
         <ul className="grid gap-3 sm:grid-cols-2">
           {filtered.map((p) => (

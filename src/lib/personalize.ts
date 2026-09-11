@@ -5,6 +5,16 @@ export type ProfileLike = Pick<
   "displayName" | "handle" | "city" | "bio" | "recentPost" | "genreTags"
 > & { firstName?: string };
 
+/** First invites that go out the moment SafeSend launches. */
+export const FIRST_WAVE = 5;
+
+/**
+ * Demo SafeSend window — the day's cap drips over a couple of minutes so
+ * a promoter watching the campaign actually sees it work. Copy still talks
+ * about human pacing; the math just isn't a 14-hour wait.
+ */
+export const SAFESEND_RAMP_MS = 2 * 60 * 1000;
+
 export function firstNameOf(displayName: string): string {
   return displayName.trim().split(/\s+/)[0] ?? displayName;
 }
@@ -82,17 +92,16 @@ export function expectedSends(options: {
   audienceCount: number;
 }): number {
   const { startedAtMs, nowMs, dailyLimit, audienceCount } = options;
-  if (nowMs <= startedAtMs || dailyLimit <= 0) return 0;
-  const elapsed = nowMs - startedAtMs;
+  if (nowMs < startedAtMs || dailyLimit <= 0 || audienceCount <= 0) return 0;
+  const firstWave = Math.min(FIRST_WAVE, dailyLimit, audienceCount);
+  const elapsed = Math.max(0, nowMs - startedAtMs);
   const dayMs = 24 * 60 * 60 * 1000;
-  const days = elapsed / dayMs;
-  const fullDays = Math.floor(days);
-  const frac = days - fullDays;
-  // SafeSend spreads across ~14 waking hours (0.58 of a day) with a gentle ramp.
-  const activeFrac = Math.min(1, frac / 0.58);
+  const fullDays = Math.floor(elapsed / dayMs);
+  const msIntoDay = elapsed - fullDays * dayMs;
+  const activeFrac = Math.min(1, msIntoDay / SAFESEND_RAMP_MS);
   const eased = activeFrac * activeFrac * (3 - 2 * activeFrac);
   const raw = fullDays * dailyLimit + Math.floor(eased * dailyLimit);
-  return Math.max(0, Math.min(audienceCount, raw));
+  return Math.max(firstWave, Math.min(audienceCount, raw));
 }
 
 export function shouldSimulateReply(handle: string, campaignId: string): boolean {

@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { createCampaign, discoverAudience } from "@/lib/server/campaigns";
 import { Button } from "@/components/ui/button";
 import { Input, Textarea } from "@/components/ui/input";
@@ -66,7 +66,15 @@ function NewCampaign() {
       <div>
         <h1 className="text-3xl">New campaign</h1>
         <p className="mt-2 text-sm text-muted">
-          City, night, and one message. We'll find the people and rewrite it for each of them.
+          City, night, and one message. We'll find the people. On the next screen,
+          tap Launch SafeSend — the first five invites go out immediately.
+        </p>
+        <p className="mt-2 text-sm text-subtle">
+          Want a working example first?{" "}
+          <Link to="/app" className="text-teal hover:underline">
+            Start a sample rooftop night from Overview
+          </Link>
+          .
         </p>
       </div>
       <label className="block text-sm text-muted">
@@ -129,7 +137,7 @@ function NewCampaign() {
       </label>
       {error && <p className="text-sm text-danger">{error}</p>}
       <Button type="submit" disabled={busy}>
-        {busy ? "Finding your crowd…" : "Create and find audience"}
+        {busy ? "Finding your crowd…" : "Find audience"}
       </Button>
     </form>
   );

@@ -116,7 +116,7 @@ async function fillCatalogAudience(
     .filter(Boolean);
   const limit = Math.min(80, Math.max(8, opts.limit ?? 40));
 
-  const scored = AUDIENCE_CATALOG.map((p) => {
+  const ranked = AUDIENCE_CATALOG.map((p) => {
     let score = 55;
     if (city && p.city.toLowerCase() === city) score += 22;
     else if (city && p.city.toLowerCase().includes(city)) score += 10;
@@ -128,10 +128,10 @@ async function fillCatalogAudience(
     const blob = `${p.bio} ${p.recentPost} ${p.genreTags.join(" ")}`.toLowerCase();
     for (const k of keywords) if (blob.includes(k)) score += 6;
     return { p, score: Math.max(20, Math.min(99, score)) };
-  })
-    .filter((x) => x.score >= 50)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, limit);
+  }).sort((a, b) => b.score - a.score);
+
+  const matched = ranked.filter((x) => x.score >= 50).slice(0, limit);
+  const scored = matched.length > 0 ? matched : ranked.slice(0, limit);
 
   await sql`
     delete from audience_profiles
@@ -355,12 +355,24 @@ export const startCampaign = createServerFn({ method: "POST" })
       select * from campaigns where id = ${data.id} and user_id = ${context.userId} limit 1
     `;
     if (!rows[0]) throw new Error("Campaign not found");
-    const queued = await sql<{ n: number }>`
+    let queued = await sql<{ n: number }>`
       select count(*)::int as n from audience_profiles
       where user_id = ${context.userId} and campaign_id = ${data.id}
     `;
     if (Number(queued[0]?.n ?? 0) === 0) {
-      throw new Error("Discover an audience before launching.");
+      await fillCatalogAudience(sql, context.userId, data.id, {
+        city: String(rows[0].city || ""),
+        gender: String(rows[0].gender_filter || "all"),
+        genre: String(rows[0].genre || ""),
+        keywords: String(rows[0].bio_keywords || ""),
+      });
+      queued = await sql<{ n: number }>`
+        select count(*)::int as n from audience_profiles
+        where user_id = ${context.userId} and campaign_id = ${data.id}
+      `;
+    }
+    if (Number(queued[0]?.n ?? 0) === 0) {
+      throw new Error("Could not find anyone for this night. Try a broader city or genre.");
     }
     const startedAt = rows[0].started_at ? String(rows[0].started_at) : new Date().toISOString();
     await sql`
@@ -382,6 +394,8 @@ export const pauseCampaign = createServerFn({ method: "POST" })
     `;
     return { ok: true as const };
   });
+
+const REPLY_AFTER_MS = 18 * 1000;
 
 export const processSends = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
@@ -422,6 +436,14 @@ export const processSends = createServerFn({ method: "POST" })
       const template = String(camp.message_template || "");
 
       for (const person of batch) {
+        const audId = String(person.id);
+        const claimed = await sql<{ id: string }>`
+          update audience_profiles set status = ${"sent"}
+          where id = ${audId} and user_id = ${context.userId} and status = ${"queued"}
+          returning id
+        `;
+        if (!claimed[0]) continue;
+
         const message = personalizeTemplate(
           template,
           {
@@ -439,7 +461,6 @@ export const processSends = createServerFn({ method: "POST" })
           city,
         );
         const logId = newId("log");
-        const audId = String(person.id);
         const handle = String(person.handle);
         await sql`
           insert into outreach_log (
@@ -448,15 +469,14 @@ export const processSends = createServerFn({ method: "POST" })
             ${logId}, ${context.userId}, ${campaignId}, ${audId}, ${handle}, ${message}
           )
         `;
-        await sql`
-          update audience_profiles set status = ${"sent"}
-          where id = ${audId} and user_id = ${context.userId}
-        `;
         sentNow += 1;
       }
 
-      const remaining = queued.length - batch.length;
-      if (remaining <= 0 && audience.length > 0) {
+      const remainingQueued = await sql<{ n: number }>`
+        select count(*)::int as n from audience_profiles
+        where user_id = ${context.userId} and campaign_id = ${campaignId} and status = ${"queued"}
+      `;
+      if (Number(remainingQueued[0]?.n ?? 0) <= 0 && audience.length > 0) {
         await sql`
           update campaigns set status = ${"completed"}
           where id = ${campaignId} and user_id = ${context.userId}
@@ -469,9 +489,9 @@ export const processSends = createServerFn({ method: "POST" })
       `;
       for (const log of logs) {
         const sentAt = new Date(String(log.sent_at)).getTime();
-        if (Date.now() - sentAt < 90 * 60 * 1000) continue;
+        if (Date.now() - sentAt < REPLY_AFTER_MS) continue;
         if (!shouldSimulateReply(String(log.handle), campaignId)) continue;
-        const when = new Date(sentAt + 2 * 60 * 60 * 1000).toISOString();
+        const when = new Date().toISOString();
         await sql`
           update outreach_log
           set replied = true, replied_at = ${when}
@@ -556,10 +576,11 @@ export const seedSampleCampaign = createServerFn({ method: "POST" })
   .handler(async ({ context }) => {
     const sql = await getSql();
     const id = newId("cmp");
+    const startedAt = new Date().toISOString();
     await sql`
       insert into campaigns (
         id, user_id, name, event_name, venue, city, event_date, genre,
-        gender_filter, bio_keywords, message_template, daily_limit, status
+        gender_filter, bio_keywords, message_template, daily_limit, status, started_at
       ) values (
         ${id}, ${context.userId},
         ${"London rooftop — 14th"},
@@ -572,7 +593,8 @@ export const seedSampleCampaign = createServerFn({ method: "POST" })
         ${"fabric, ministry, rooftop"},
         ${"I'm putting on a rooftop thing, proper house line-up, smaller room. Reckon it'd be your kind of night?"},
         ${35},
-        ${"draft"}
+        ${"running"},
+        ${startedAt}
       )
     `;
     await fillCatalogAudience(sql, context.userId, id, {

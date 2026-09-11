@@ -13,6 +13,7 @@ import {
   type OutreachRow,
 } from "@/lib/server/campaigns";
 import { rewriteInvite } from "@/lib/server/ai";
+import { getProfile, type Profile } from "@/lib/server/profile";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { personalizeTemplate } from "@/lib/personalize";
@@ -22,29 +23,56 @@ export const Route = createFileRoute("/app/campaigns/$id")({
   head: () => ({ meta: [{ title: "Campaign – Nitefill" }] }),
 });
 
+function statusTone(status: string) {
+  if (status === "running") return "success" as const;
+  if (status === "completed") return "teal" as const;
+  if (status === "paused") return "orange" as const;
+  return "muted" as const;
+}
+
 function CampaignDetail() {
   const { id } = Route.useParams();
   const [campaign, setCampaign] = useState<Campaign | null>(null);
   const [audience, setAudience] = useState<AudienceRow[]>([]);
   const [logs, setLogs] = useState<OutreachRow[]>([]);
+  const [profile, setProfile] = useState<Profile | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
   const [previewSource, setPreviewSource] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [lastWave, setLastWave] = useState(0);
 
   async function load() {
-    const [c, a, o] = await Promise.all([
+    const [c, a, o, p] = await Promise.all([
       getCampaign({ data: { id } }),
       listAudience({ data: { campaignId: id } }),
       listOutreach({ data: { campaignId: id } }),
+      getProfile(),
     ]);
     setCampaign(c);
     setAudience(a);
     setLogs(o);
+    setProfile(p);
   }
 
   useEffect(() => {
-    void processSends({ data: { campaignId: id } }).then(load);
+    let cancelled = false;
+    async function tick() {
+      try {
+        const res = await processSends({ data: { campaignId: id } });
+        if (cancelled) return;
+        if (res.sentNow > 0) setLastWave(res.sentNow);
+        await load();
+      } catch {
+        if (!cancelled) await load();
+      }
+    }
+    void tick();
+    const timer = setInterval(() => void tick(), 4000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
   }, [id]);
 
   async function launch() {
@@ -52,7 +80,8 @@ function CampaignDetail() {
     setError(null);
     try {
       await startCampaign({ data: { id } });
-      await processSends({ data: { campaignId: id } });
+      const res = await processSends({ data: { campaignId: id } });
+      setLastWave(res.sentNow);
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not launch.");
@@ -87,7 +116,7 @@ function CampaignDetail() {
   async function previewOne(person: AudienceRow) {
     if (!campaign) return;
     setBusy(true);
-    const profile = {
+    const profileLike = {
       displayName: person.displayName,
       handle: person.handle,
       city: person.city || campaign.city,
@@ -97,7 +126,7 @@ function CampaignDetail() {
     };
     const fallback = personalizeTemplate(
       campaign.messageTemplate,
-      profile,
+      profileLike,
       campaign.eventName || campaign.name,
       campaign.city,
     );
@@ -107,7 +136,7 @@ function CampaignDetail() {
           template: campaign.messageTemplate,
           event: campaign.eventName || campaign.name,
           city: campaign.city,
-          profile,
+          profile: profileLike,
         },
       });
       setPreview(res.text);
@@ -124,6 +153,11 @@ function CampaignDetail() {
     return <p className="text-muted">Loading campaign…</p>;
   }
 
+  const canLaunch = campaign.status === "draft" || campaign.status === "paused";
+  const running = campaign.status === "running";
+  const total = campaign.queued + campaign.sent;
+  const progress = total > 0 ? Math.round((campaign.sent / total) * 100) : 0;
+
   return (
     <div className="space-y-8">
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -138,24 +172,79 @@ function CampaignDetail() {
             {campaign.venue ? ` · ${campaign.venue}` : ""}
           </p>
         </div>
-        <div className="flex flex-wrap gap-2">
-          <Badge tone={campaign.status === "running" ? "success" : "muted"}>{campaign.status}</Badge>
-          {campaign.status !== "running" && (
-            <Button onClick={launch} disabled={busy}>
-              {busy ? "Working…" : "Launch SafeSend"}
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge tone={statusTone(campaign.status)}>
+            {running ? "SafeSend running" : campaign.status}
+          </Badge>
+          {canLaunch && (
+            <Button onClick={launch} disabled={busy} size="lg">
+              {busy ? "Launching…" : campaign.status === "paused" ? "Resume SafeSend" : "Launch SafeSend"}
             </Button>
           )}
-          {campaign.status === "running" && (
+          {running && (
             <Button variant="ghost" onClick={pause} disabled={busy}>
               Pause
             </Button>
           )}
-          <Button variant="ghost" onClick={rediscover} disabled={busy}>
+          <Button variant="ghost" onClick={rediscover} disabled={busy || running}>
             Refresh audience
           </Button>
         </div>
       </div>
+
+      {canLaunch && (
+        <aside className="rounded-2xl border border-orange/30 bg-orange/8 p-5">
+          <p className="text-sm font-medium text-fg">Ready to send</p>
+          <p className="mt-1 text-sm leading-relaxed text-muted">
+            {audience.length} people are queued. Launch sends the first five personal
+            invites now, then drips the rest over a couple of minutes so it doesn't
+            look like a blast. Stay on this page — Sent will climb on its own.
+          </p>
+        </aside>
+      )}
+
+      {running && (
+        <aside className="rounded-2xl border border-teal/30 bg-teal/8 p-5">
+          <p className="text-sm font-medium text-fg">SafeSend is live</p>
+          <p className="mt-1 text-sm leading-relaxed text-muted">
+            {lastWave > 0
+              ? `Just sent ${lastWave} more. `
+              : "First wave is out. "}
+            The rest drip with uneven gaps. Replies show up here — you still answer
+            them in Instagram.
+          </p>
+          <div className="mt-4 h-2 overflow-hidden rounded-full bg-panel">
+            <div
+              className="h-full rounded-full bg-teal transition-[width] duration-500"
+              style={{ width: `${progress}%` }}
+            />
+          </div>
+          <p className="mt-2 text-xs text-subtle">{progress}% of this list invited</p>
+        </aside>
+      )}
+
+      {campaign.status === "completed" && (
+        <aside className="rounded-2xl border border-fg/8 bg-surface p-5">
+          <p className="text-sm font-medium text-fg">This list is done</p>
+          <p className="mt-1 text-sm text-muted">
+            Everyone queued has been invited. Open a new campaign for the next night,
+            or refresh the audience to find another room.
+          </p>
+        </aside>
+      )}
+
       {error && <p className="text-sm text-danger">{error}</p>}
+
+      {profile && !profile.instagramConnected && (
+        <p className="text-sm text-subtle">
+          Invites are simulated in this workspace.{" "}
+          <Link to="/app/connect" className="text-teal hover:underline">
+            Connect a handle
+          </Link>{" "}
+          so the dashboard shows who you're sending as.
+        </p>
+      )}
+
       <div className="grid gap-3 sm:grid-cols-3">
         {[
           ["Queued", campaign.queued],
@@ -164,7 +253,9 @@ function CampaignDetail() {
         ].map(([l, v]) => (
           <div key={String(l)} className="rounded-2xl border border-fg/8 bg-surface p-5">
             <p className="text-xs text-subtle">{l}</p>
-            <p className="mt-1 font-display text-2xl tabular-nums">{v}</p>
+            <p className="mt-1 font-display text-2xl tabular-nums" aria-live="polite">
+              {v}
+            </p>
           </div>
         ))}
       </div>
@@ -179,7 +270,12 @@ function CampaignDetail() {
       <section>
         <h2 className="mb-3 text-xl">Audience</h2>
         {audience.length === 0 ? (
-          <p className="text-sm text-muted">No matches yet. Refresh audience to search the city.</p>
+          <div className="rounded-2xl border border-dashed border-fg/15 p-8 text-center">
+            <p className="text-sm text-muted">No matches yet.</p>
+            <Button className="mt-4" onClick={rediscover} disabled={busy}>
+              Find people in {campaign.city || "this city"}
+            </Button>
+          </div>
         ) : (
           <ul className="divide-y divide-fg/8 rounded-2xl border border-fg/8">
             {audience.map((p) => (
@@ -205,7 +301,9 @@ function CampaignDetail() {
       <section>
         <h2 className="mb-3 text-xl">Sent</h2>
         {logs.length === 0 ? (
-          <p className="text-sm text-muted">Nothing sent yet. Launch to start SafeSend.</p>
+          <p className="text-sm text-muted">
+            Nothing sent yet. Launch SafeSend — the first five go out immediately.
+          </p>
         ) : (
           <ul className="space-y-3">
             {logs.map((l) => (

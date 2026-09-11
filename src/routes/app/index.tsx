@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { planById } from "@/data/content";
 import { RedeemPromo } from "@/components/app/redeem-promo";
+import { CampaignPlaybook } from "@/components/app/campaign-playbook";
 
 export const Route = createFileRoute("/app/")({
   component: OverviewPage,
@@ -18,6 +19,7 @@ function OverviewPage() {
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   async function load() {
     const [s, c, p] = await Promise.all([dashboardStats(), listCampaigns(), getProfile()]);
@@ -27,16 +29,33 @@ function OverviewPage() {
   }
 
   useEffect(() => {
-    void load();
+    let cancelled = false;
+    async function tick() {
+      try {
+        await processSends({ data: {} });
+        if (cancelled) return;
+        await load();
+      } catch {
+        if (!cancelled) await load();
+      }
+    }
+    void tick();
+    const timer = setInterval(() => void tick(), 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
   }, []);
 
   async function sample() {
     setBusy(true);
+    setError(null);
     try {
       const created = await seedSampleCampaign();
-      await processSends({ data: {} });
+      await processSends({ data: { campaignId: created.id } });
       await navigate({ to: "/app/campaigns/$id", params: { id: created.id } });
-    } finally {
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not start the sample night.");
       setBusy(false);
     }
   }
@@ -54,18 +73,20 @@ function OverviewPage() {
           <p className="mt-2 text-sm text-muted">
             {profile?.instagramConnected
               ? `Sending as @${profile.instagramHandle}`
-              : "Connect Instagram to send from your own account."}
+              : "Connect Instagram to send from your own account — or start a sample night now."}
           </p>
         </div>
         <div className="flex gap-2">
           <Button variant="ghost" onClick={sample} disabled={busy}>
-            {busy ? "Creating…" : "Sample rooftop night"}
+            {busy ? "Launching…" : "Sample rooftop night"}
           </Button>
           <Link to="/app/campaigns/new">
             <Button>New campaign</Button>
           </Link>
         </div>
       </div>
+      {error && <p className="text-sm text-danger">{error}</p>}
+      <CampaignPlaybook />
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {[
           { label: "Invites sent", value: stats?.sent ?? "—" },
@@ -106,7 +127,10 @@ function OverviewPage() {
         </div>
         {campaigns.length === 0 ? (
           <div className="rounded-2xl border border-dashed border-fg/15 bg-surface/50 p-8 text-center">
-            <p className="text-muted">No campaigns yet. Start with a London rooftop sample, or build your own.</p>
+            <p className="text-muted">No campaigns yet. Start with a London rooftop sample — it launches and sends the first wave for you.</p>
+            <Button className="mt-5" onClick={sample} disabled={busy}>
+              {busy ? "Launching…" : "Run sample rooftop"}
+            </Button>
           </div>
         ) : (
           <ul className="space-y-3">
@@ -123,7 +147,13 @@ function OverviewPage() {
                       {c.city} · {c.sent} sent · {c.queued} queued
                     </p>
                   </div>
-                  <Badge tone={c.status === "running" ? "success" : "muted"}>{c.status}</Badge>
+                  <Badge
+                    tone={
+                      c.status === "running" ? "success" : c.status === "completed" ? "teal" : "muted"
+                    }
+                  >
+                    {c.status}
+                  </Badge>
                 </Link>
               </li>
             ))}
